@@ -380,3 +380,92 @@ test('args-hash matching survives same-args duplicate (approx, no crash)', () =>
     rmSync(path, { force: true });
   }
 });
+
+// Regression: GitHub Copilot CLI delivers Claude-compatible hook payloads to a
+// plugin's hooks.json in snake_case (`session_id`, `tool_name`, `tool_input`,
+// `transcript_path`, `agent_name`, `stop_reason`) with an ISO-8601 string
+// `timestamp`, not the camelCase shape the handlers historically read. Captured
+// from CLI 1.0.60 with a payload-logging tracker. Before normalization,
+// `p.toolName` was undefined, so the span INSERT threw ("cannot be bound to
+// SQLite parameter 5") and every skill phase / tool span / worktree
+// re-attribution was silently dropped (fail-open swallowed the error).
+test('real plugin payloads (snake_case + ISO timestamp) record skill phase and span', () => {
+  const { db, path } = freshDb();
+  try {
+    const s = 'e75fd03a';
+    handle('sessionStart', { hook_event_name: 'SessionStart', session_id: s, timestamp: '2026-06-09T20:18:40.609Z', cwd: '/x', source: 'new' }, db, opts());
+    handle('userPromptSubmitted', { hook_event_name: 'UserPromptSubmit', session_id: s, timestamp: '2026-06-09T20:18:40.521Z', cwd: '/x', prompt: 'Invoke the using-superpowers skill.' }, db, opts());
+
+    const task = db.get('SELECT * FROM tasks WHERE session_id=?', [s]);
+    assert.equal(task.prompt_excerpt, 'Invoke the using-superpowers skill.');
+    assert.equal(task.feature, 'feat-x');
+
+    handle('preToolUse', { hook_event_name: 'PreToolUse', session_id: s, timestamp: '2026-06-09T20:18:45.005Z', cwd: '/x', tool_name: 'skill', tool_input: { skill: 'using-superpowers' } }, db, opts());
+    const ph = db.get("SELECT * FROM phases WHERE session_id=? AND skill='using-superpowers'", [s]);
+    assert.ok(ph, 'skill phase should be opened from tool_input.skill');
+    assert.equal(ph.kind, 'skill');
+    assert.equal(ph.status, 'active');
+
+    const span = db.get("SELECT * FROM spans WHERE session_id=? AND name='skill'", [s]);
+    assert.ok(span, 'a span must be recorded for the skill tool');
+    assert.equal(span.detail, 'using-superpowers');
+    assert.equal(span.phase_id, ph.phase_id);
+    // ISO timestamp parsed to epoch ms, not wall-clock fallback.
+    assert.equal(span.started_at, Date.parse('2026-06-09T20:18:45.005Z'));
+
+    handle('postToolUse', { hook_event_name: 'PostToolUse', session_id: s, timestamp: '2026-06-09T20:18:45.081Z', cwd: '/x', tool_name: 'skill', tool_input: { skill: 'using-superpowers' } }, db, opts());
+    const closed = db.get("SELECT * FROM spans WHERE session_id=? AND name='skill'", [s]);
+    assert.equal(closed.success, 1);
+    assert.notEqual(closed.ended_at, null);
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+// Regression: the SubagentStop payload is snake_case (`agent_name`,
+// `stop_reason`) while subagentStart is Copilot-native camelCase. The stop
+// handler matches the running subagent by name, so without normalization
+// `p.agentName` was undefined and the subagent never got marked stopped.
+test('real subagent payloads: camelCase start + snake_case stop pair correctly', () => {
+  const { db, path } = freshDb();
+  try {
+    const s = 'sub-real';
+    handle('sessionStart', { sessionId: s, timestamp: 0, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: s, timestamp: 10, cwd: '/x', prompt: 'p' }, db, opts());
+    // subagentStart arrives camelCase with a numeric timestamp.
+    handle('subagentStart', { sessionId: s, timestamp: 100, cwd: '/x', agentName: 'explore', agentDisplayName: 'Explore Agent', agentDescription: 'desc', transcriptPath: '/t.jsonl' }, db, opts());
+    let sub = db.get('SELECT * FROM subagents WHERE session_id=?', [s]);
+    assert.equal(sub.agent_name, 'explore');
+    assert.equal(sub.status, 'running');
+    // subagentStop arrives snake_case with an ISO timestamp.
+    handle('subagentStop', { hook_event_name: 'SubagentStop', session_id: s, timestamp: '2026-06-09T20:19:01.317Z', cwd: '/x', agent_name: 'explore', agent_display_name: 'Explore Agent', stop_reason: 'end_turn' }, db, opts());
+    sub = db.get('SELECT * FROM subagents WHERE session_id=?', [s]);
+    assert.equal(sub.status, 'stopped');
+    assert.equal(sub.stop_reason, 'end_turn');
+    assert.equal(sub.duration_reliable, 1);
+    assert.equal(sub.duration_ms, Date.parse('2026-06-09T20:19:01.317Z') - 100);
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+// Regression: worktree branch re-attribution reads `path`/`command` out of the
+// tool input. With snake_case `tool_input` unread, detection never fired and a
+// worktree task stayed mis-attributed to the session branch.
+test('real plugin payload: edit path in tool_input re-attributes worktree branch', () => {
+  const { db, path } = freshDb();
+  try {
+    const s = 'wt-real';
+    const o = wtOpts({ '/wt/feat-x': 'feat-x' });
+    handle('sessionStart', { hook_event_name: 'SessionStart', session_id: s, timestamp: '2026-06-09T20:18:40.000Z', cwd: '/repo' }, db, o);
+    handle('userPromptSubmitted', { hook_event_name: 'UserPromptSubmit', session_id: s, timestamp: '2026-06-09T20:18:41.000Z', cwd: '/repo', prompt: 'p' }, db, o);
+    handle('preToolUse', { hook_event_name: 'PreToolUse', session_id: s, timestamp: '2026-06-09T20:18:42.000Z', cwd: '/repo', tool_name: 'edit', tool_input: { path: '/wt/feat-x/src/a.js' } }, db, o);
+    const task = db.get('SELECT feature FROM tasks WHERE session_id=?', [s]);
+    assert.equal(task.feature, 'feat-x');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});

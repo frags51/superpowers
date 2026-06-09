@@ -29,7 +29,47 @@ function normalizeOpts(o = {}) {
 }
 
 const sid = (p) => p.sessionId || p.session_id;
-const ts = (p) => (typeof p.timestamp === 'number' ? p.timestamp : nowMs());
+
+// Copilot CLI sends `timestamp` as a number for Copilot-native events but as an
+// ISO-8601 string for Claude-compatible events (PreToolUse, PostToolUse,
+// SessionStart, SessionEnd, UserPromptSubmit, SubagentStop). Accept both; fall
+// back to wall-clock when absent or unparseable.
+const ts = (p) => {
+  if (typeof p.timestamp === 'number') return p.timestamp;
+  if (typeof p.timestamp === 'string') {
+    const n = Date.parse(p.timestamp);
+    if (!Number.isNaN(n)) return n;
+  }
+  return nowMs();
+};
+
+// Copilot CLI delivers hook payloads in two shapes depending on the event's
+// origin. Events that mirror a Claude Code hook — PreToolUse, PostToolUse,
+// SubagentStop, SessionStart, SessionEnd, UserPromptSubmit — arrive in
+// snake_case (`tool_name`, `tool_input`, `transcript_path`, `agent_name`,
+// `stop_reason`, ...) alongside a `hook_event_name` field. Copilot-native
+// events (e.g. subagentStart) arrive in camelCase. Synthetic payloads from the
+// tests and `--selftest` are already camelCase. Map the snake_case keys onto
+// the camelCase names the handlers read so a single code path serves every
+// shape. Existing camelCase keys always win, so already-normalized payloads
+// pass through unchanged.
+function normalizePayload(p) {
+  if (!p || typeof p !== 'object') return p;
+  const out = { ...p };
+  const alias = (camel, snake) => {
+    if (out[camel] === undefined && out[snake] !== undefined) out[camel] = out[snake];
+  };
+  alias('sessionId', 'session_id');
+  alias('toolName', 'tool_name');
+  alias('toolInput', 'tool_input');
+  alias('toolCallId', 'tool_call_id');
+  alias('transcriptPath', 'transcript_path');
+  alias('agentName', 'agent_name');
+  alias('agentDisplayName', 'agent_display_name');
+  alias('agentDescription', 'agent_description');
+  alias('stopReason', 'stop_reason');
+  return out;
+}
 
 // Copilot CLI tool hooks deliver arguments under `toolArgs`; accept the older
 // `toolInput`/`arguments` shapes too for robustness.
@@ -305,7 +345,7 @@ export function handle(event, payload, db, opts) {
   const o = normalizeOpts(opts);
   const fn = HANDLERS[event];
   if (!fn) return;
-  fn(db, payload, o);
+  fn(db, normalizePayload(payload), o);
 }
 
 // --- CLI entry ---
