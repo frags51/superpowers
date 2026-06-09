@@ -53,12 +53,18 @@ Options: `--open` (open the browser), `--port <n>`, and a positional
 **Timeline** filter, and a **Refresh** button at the top that regenerates the
 report straight from `usage.db`:
 
-- **Timeline** — restricts every chart to a time window: **Last 1 day**,
-  **Last 1 week**, **Last 1 month**, **All time**, or a **Custom range** of
-  dates. The window is applied server-side via `from`/`to` (millisecond)
-  query params on `/api/report`.
+- **Timeline** — restricts every chart to a time window: **Last 1 hour**,
+  **Last 1 day**, **Last 1 week**, **Last 1 month**, **All time**, or a
+  **Custom range**. The custom range uses **date-and-time** pickers
+  (`datetime-local`), so you can filter to a precise moment, not just a whole
+  day. The window is applied server-side via `from`/`to` (millisecond) query
+  params on `/api/report`.
 - **Usage** — a collapsible infographic: **repo → branch → skill**, showing AI
-  credit usage, duration (in seconds), and the **start time** at each level.
+  credit usage, duration (in seconds), and the **start time** at each level. A
+  **"What do these labels mean?"** callout explains the tree's placeholders:
+  `(unknown repo)` / `(no branch)` (no git repo or branch detected), `(root)`
+  (work outside any skill — the implicit root phase), and `unknown` (a skill
+  activated whose name could not be resolved).
 - **Stats** — top tools (calls + durations), superpowers **phase analysis** per
   skill (runs, total/avg time, credits, tokens), and subagent activity — each
   with **Started** / **Last active** timestamps.

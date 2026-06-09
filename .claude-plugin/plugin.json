@@ -1,7 +1,7 @@
 {
   "name": "superpowers",
   "description": "GHCP-native core skills library for the GitHub Copilot CLI: TDD, debugging, collaboration patterns, and plugin agents.",
-  "version": "5.3.2",
+  "version": "5.3.3",
   "author": {
     "name": "Jesse Vincent",
     "email": "jesse@fsck.com"
