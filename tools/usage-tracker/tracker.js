@@ -33,7 +33,28 @@ const ts = (p) => (typeof p.timestamp === 'number' ? p.timestamp : nowMs());
 
 // Copilot CLI tool hooks deliver arguments under `toolArgs`; accept the older
 // `toolInput`/`arguments` shapes too for robustness.
-const toolArgsOf = (p) => (p.toolArgs ?? p.toolInput ?? p.arguments ?? {});
+//
+// The live CLI delivers `toolArgs` as a JSON-encoded *string*
+// (e.g. `'{"skill":"test-driven-development"}'`), not a nested object. Parse it
+// so downstream field access works: the phase/skill name (`input.skill`), the
+// subagent attribution (`input.agent_type`/`input.description`), and the
+// worktree-branch detection (`input.path`/`input.command`) all read object
+// fields. Synthetic/legacy payloads that already pass an object pass through
+// unchanged. A non-JSON or non-object value normalizes to `{}` so callers never
+// see a primitive.
+function parseToolArgs(v) {
+  if (typeof v === 'string') {
+    if (v === '') return {};
+    try {
+      const parsed = JSON.parse(v);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return v && typeof v === 'object' ? v : {};
+}
+const toolArgsOf = (p) => parseToolArgs(p.toolArgs ?? p.toolInput ?? p.arguments ?? {});
 
 // Tools that express "I am working here": file writers and shell `cd`. Reads
 // (view/grep/glob) are deliberately excluded so that incidentally reading a

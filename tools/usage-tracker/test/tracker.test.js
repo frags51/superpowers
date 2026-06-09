@@ -183,6 +183,39 @@ test('skill phase detected from toolArgs (real CLI field name)', () => {
   }
 });
 
+// Regression: the LIVE Copilot CLI delivers `toolArgs` as a JSON-encoded *string*
+// (verified against CLI 1.0.60 with a capture hook), not a nested object. Earlier
+// tests only exercised the object shape, so a string payload silently dropped the
+// skill name (phase -> 'unknown'), the task detail, and worktree detection.
+test('toolArgs arriving as a JSON string (real CLI shape) is parsed', () => {
+  const { db, path } = freshDb();
+  try {
+    const sid = 's-str';
+    const o = wtOpts({ '/wt/feat-x': 'feat-x' });
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: '/repo' }, db, o);
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: '/repo', prompt: 'p' }, db, o);
+
+    // skill phase: skill name must be read out of the stringified args
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: '/repo', toolName: 'skill', toolArgs: '{"skill":"test-driven-development"}' }, db, o);
+    const ph = db.get("SELECT * FROM phases WHERE session_id=? AND skill='test-driven-development'", [sid]);
+    assert.ok(ph, 'skill phase should be labeled, not "unknown"');
+    assert.equal(ph.kind, 'skill');
+
+    // task span: detail must combine agent_type + description from the string
+    handle('preToolUse', { sessionId: sid, timestamp: 110, cwd: '/repo', toolName: 'task', toolArgs: '{"agent_type":"explore","description":"Probe reply test"}' }, db, o);
+    const taskSpan = db.get("SELECT detail FROM spans WHERE session_id=? AND name='task'", [sid]);
+    assert.equal(taskSpan.detail, 'explore: Probe reply test');
+
+    // worktree detection: edit path in the string must re-attribute the branch
+    handle('preToolUse', { sessionId: sid, timestamp: 120, cwd: '/repo', toolName: 'edit', toolArgs: '{"path":"/wt/feat-x/src/a.js"}' }, db, o);
+    const task = db.get('SELECT feature FROM tasks WHERE session_id=?', [sid]);
+    assert.equal(task.feature, 'feat-x');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
 // Sessions start in `master` but the agent creates a git worktree on a feature
 // branch and works there. The session cwd never changes, so the branch must be
 // inferred from where the agent actually writes (edit/create paths, bash `cd`).
