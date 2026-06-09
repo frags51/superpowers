@@ -5,9 +5,9 @@ rem ===========================================================================
 rem  Remote installer for the Superpowers usage tracker (Windows / cmd.exe).
 rem
 rem  Downloads this tool (a clone of the frags51/superpowers fork) and installs
-rem  it into the GitHub Copilot CLI: wires the HUD statusline and writes a
-rem  self-contained hooks file so usage/subagent tracking runs WITHOUT needing
-rem  the full plugin installed via /plugin.
+rem  it into the GitHub Copilot CLI: writes a self-contained hooks file so
+rem  usage/subagent tracking runs WITHOUT needing the full plugin installed via
+rem  /plugin, plus a headless usage-snapshot collector (no visible status line).
 rem
 rem  Usage:
 rem    setup.cmd                       (from a local checkout, or after download)
@@ -27,7 +27,7 @@ rem    COPILOT_HOME            Copilot config dir   (default: %USERPROFILE%\.cop
 rem    SUPERPOWERS_USAGE_REPO  git URL to clone     (default: the frags51 fork)
 rem    SUPERPOWERS_USAGE_REF   branch/tag/commit    (default: ghcp-native)
 rem    SUPERPOWERS_USAGE_SRC   where to clone       (default: %COPILOT_HOME%\plugin-data\superpowers-usage\src)
-rem    SUPERPOWERS_USAGE_NO_STATUSLINE=1  install hooks only (skip the statusline)
+rem    SUPERPOWERS_USAGE_NO_SNAPSHOT=1   install hooks only (skip AI-credit snapshots)
 rem ===========================================================================
 
 rem --- Defaults ---------------------------------------------------------------
@@ -82,8 +82,8 @@ echo ==^> Verifying the tracker runs here
 node "%TOOL_DIR%\tracker.js" --selftest || ( echo error: tracker selftest failed & exit /b 1 )
 
 rem --- Install into Copilot ---------------------------------------------------
-set "INSTALL_FLAGS=--hooks"
-if "%SUPERPOWERS_USAGE_NO_STATUSLINE%"=="1" set "INSTALL_FLAGS=--hooks-only"
+set "INSTALL_FLAGS="
+if "%SUPERPOWERS_USAGE_NO_SNAPSHOT%"=="1" set "INSTALL_FLAGS=--no-snapshot"
 echo ==^> Installing into Copilot ^("%COPILOT_HOME%"^)
 node "%TOOL_DIR%\install.js" %INSTALL_FLAGS% || ( echo error: install failed & exit /b 1 )
 
@@ -96,10 +96,12 @@ echo   copilot    : %COPILOT_HOME%
 echo   hooks file : %COPILOT_HOME%\hooks\superpowers-usage.json
 echo.
 echo   Next steps:
-echo     1. Restart Copilot CLI so the hooks and statusline load.
-echo     2. List active subagents any time with:
+echo     1. Restart Copilot CLI so the hooks load ^(tracking is headless^).
+echo     2. Open the dashboard ^(credit/time infographic + stats^):
+echo          node "%TOOL_DIR%\dashboard.js"
+echo     3. List active subagents any time with:
 echo          node "%TOOL_DIR%\subagents.js" --all
-echo     3. Uninstall with:
+echo     4. Uninstall with:
 echo          node "%TOOL_DIR%\uninstall.js"
 echo.
 

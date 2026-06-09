@@ -24,20 +24,38 @@ The Copilot CLI fires lifecycle hooks; `tracker.js` turns them into rows:
   name+args calls may swap durations.
 - **subagents** — every dispatched subagent with its `description` (what it is
   working on), start/stop, and a *reliable-only* duration.
-- **usage_snapshots** — raw cumulative usage captured by the statusline, the
-  source for phase deltas.
+- **usage_snapshots** — raw cumulative usage captured by a **headless snapshot
+  collector** (wired as a no-output `statusLine`), the source for phase credit
+  deltas. There is **no visible status line**.
 
 See the full schema and rationale in
 `docs/superpowers/specs/2026-06-08-superpowers-usage-tracking-design.md`
 (in the parent `agentharness` repo).
 
+## Dashboard
+
+A zero-dependency local web UI to explore the data:
+
+    node vendor/superpowers/tools/usage-tracker/dashboard.js
+    # then open the printed URL (default http://localhost:7493/)
+
+Options: `--port <n>` and a positional `path/to/usage.db` (defaults to the
+standard DB). It has two pages and a **Refresh** button at the top that
+regenerates the report straight from `usage.db`:
+
+- **Usage** — a collapsible infographic: **repo → branch → skill**, showing AI
+  credit usage and duration (in seconds) at each level.
+- **Stats** — top tools (calls + durations), superpowers **phase analysis** per
+  skill (runs, total/avg time, credits, tokens), and subagent activity.
+
 ## How usage is attributed
 
 No hook carries token/credit data, so:
 
-- **Credits / premium / cost**: `statusline.js` snapshots the CLI's cumulative
-  `statusObject` figures on every render into `usage_snapshots`. A phase's usage
-  is the **delta** of snapshots across its time window.
+- **Credits / premium / cost**: the headless `snapshot.js` (wired as a no-output
+  `statusLine`) records the CLI's cumulative `statusObject` figures into
+  `usage_snapshots`. A phase's usage is the **delta** of snapshots across its
+  time window.
 - **Tokens**: summed from the session transcript (`events.jsonl`). The local
   transcript exposes **output** tokens only, so `input_tokens` is reserved
   (NULL) locally; `output_tokens`/`total_tokens` are populated.
@@ -45,19 +63,25 @@ No hook carries token/credit data, so:
 ## Install
 
 Tracking **hooks** load automatically when the superpowers plugin is installed
-via `/plugin`. Wire the **statusline** once (a plugin manifest cannot set it):
+via `/plugin`. Run the installer once to write the standalone hooks file and the
+headless snapshot collector (which records AI-credit usage with no visible
+status line — a plugin manifest cannot set it):
 
     node vendor/superpowers/tools/usage-tracker/install.js
+    # hooks only, no credit snapshots:
+    node vendor/superpowers/tools/usage-tracker/install.js --no-snapshot
     # revert with:
     node vendor/superpowers/tools/usage-tracker/uninstall.js
 
-Restart Copilot CLI after installing so hooks and the statusline load.
+Restart Copilot CLI after installing so the hooks load.
+
 
 ### Install on another machine (no plugin required)
 
 To set this up on a different machine — downloading the tool and wiring both the
-hooks and the statusline without installing the full plugin — run the remote
-installer. It clones the fork, self-tests, and installs into Copilot:
+hooks and the headless credit snapshotter without installing the full plugin —
+run the remote installer. It clones the fork, self-tests, and installs into
+Copilot:
 
     curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.sh | bash
 
@@ -91,8 +115,8 @@ The same `SUPERPOWERS_USAGE_*` / `COPILOT_HOME` environment overrides apply.
 
 This writes a **self-contained hooks file** at
 `$COPILOT_HOME/hooks/superpowers-usage.json` (absolute paths, all lifecycle
-events) plus the statusline, then prints next steps. Restart Copilot CLI
-afterward. Overrides via environment:
+events) plus the headless credit snapshotter, then prints next steps. Restart
+Copilot CLI afterward. Overrides via environment:
 
 | Env var | Purpose | Default |
 | --- | --- | --- |
@@ -100,7 +124,7 @@ afterward. Overrides via environment:
 | `SUPERPOWERS_USAGE_REPO` | git URL to clone | `https://github.com/frags51/superpowers.git` |
 | `SUPERPOWERS_USAGE_REF` | branch/tag/commit | `ghcp-native` |
 | `SUPERPOWERS_USAGE_SRC` | where to clone | `$COPILOT_HOME/plugin-data/superpowers-usage/src` |
-| `SUPERPOWERS_USAGE_NO_STATUSLINE=1` | install hooks only | off |
+| `SUPERPOWERS_USAGE_NO_SNAPSHOT=1` | install hooks only (skip credit snapshots) | off |
 
 Uninstall a standalone install with:
 
@@ -110,9 +134,8 @@ Uninstall a standalone install with:
 > remove the standalone hooks file first (`uninstall.js`) so events aren't
 > recorded twice.
 
-For a plugin-only machine that just needs the standalone hooks wired (e.g. you
-manage the source yourself), `node install.js --hooks` writes the hooks file in
-addition to the statusline; `--hooks-only` skips the statusline.
+For a machine that should record events but not AI-credit usage, `node
+install.js --no-snapshot` writes only the hooks file (no statusLine collector).
 
 ## Subagents CLI
 
@@ -188,8 +211,8 @@ node tools/usage-tracker/tracker.js --selftest
   `duration_ms`, and are **excluded from all latency/perf analysis**. Counts and
   descriptions remain correct. Always filter on `duration_reliable=1` for timing.
 - **Output tokens only** locally (input tokens aren't in `events.jsonl`).
-- **Snapshot cadence** bounds credit/cost delta precision to statusline render
-  frequency; token sums are exact.
+- **Snapshot cadence** bounds credit/cost delta precision to how often the CLI
+  re-renders the (headless) statusLine; token sums are exact.
 - The built-in **`general-purpose`** subagent historically does not emit
   subagent hooks, so those background tasks are not counted; `explore`, `task`,
   `code-review`, and plugin agents are.

@@ -1,19 +1,22 @@
 // Installer for the superpowers usage tracker.
 //
-// Two install surfaces:
-//   * statusLine  -> settings.json (a plugin manifest cannot set this)
-//   * hooks file  -> $COPILOT_HOME/hooks/superpowers-usage.json
+// Installs two things into the Copilot CLI:
+//   * hooks file   -> $COPILOT_HOME/hooks/superpowers-usage.json
+//       Records sessions/tasks/phases/spans/subagents from lifecycle events.
+//   * statusLine   -> settings.json (points at snapshot.js)
+//       A HEADLESS collector: it prints nothing (no visible status line) and
+//       only records cumulative usage snapshots (AI credits/premium/cost), which
+//       are the sole source of per-phase credit deltas. A plugin manifest cannot
+//       set statusLine, so it is wired here.
 //
-// When the superpowers plugin is installed via /plugin, the tracking hooks load
-// automatically from the plugin's hooks/hooks.json and you only need the
-// statusLine (`node install.js`). On a machine WITHOUT the plugin (e.g. a remote
-// install of just this tool), pass `--hooks` to also write a self-contained
-// hooks file with absolute paths so tracking works standalone.
+// When the superpowers plugin is installed via /plugin, the hooks also load from
+// the plugin's hooks/hooks.json; this installer is still needed for the snapshot
+// statusLine (and provides a standalone hooks file for non-plugin installs).
 //
 // Flags:
-//   --hooks         also write the standalone hooks file (statusLine + hooks)
-//   --hooks-only    write only the hooks file (skip statusLine)
-//   --no-statusline skip the statusLine (hooks only)
+//   --no-snapshot   install only the hooks file (skip the snapshot statusLine)
+//   --hooks-only    alias for --no-snapshot
+//   --hooks         accepted for backward compatibility (no-op; hooks always install)
 import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,8 +36,8 @@ const HOOK_EVENTS = [
   'sessionEnd',
 ];
 
-export function applyInstall(settings, statuslinePath) {
-  settings.statusLine = { type: 'command', command: `node "${statuslinePath}"` };
+export function applyInstall(settings, snapshotPath) {
+  settings.statusLine = { type: 'command', command: `node "${snapshotPath}"` };
   return settings;
 }
 export function applyUninstall(settings) {
@@ -63,12 +66,12 @@ function loadJsonc(file) {
   } catch { return {}; }
 }
 
-function installStatusline(copilotHome) {
+function installSnapshot(copilotHome) {
   const settingsPath = join(copilotHome, 'settings.json');
-  const statuslinePath = join(HERE, 'statusline.js');
+  const snapshotPath = join(HERE, 'snapshot.js');
   const settings = loadJsonc(settingsPath);
   if (existsSync(settingsPath)) copyFileSync(settingsPath, settingsPath + '.usage-backup');
-  applyInstall(settings, statuslinePath);
+  applyInstall(settings, snapshotPath);
   mkdirSync(copilotHome, { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   return settingsPath;
@@ -85,21 +88,18 @@ function installHooksFile(copilotHome) {
 
 function main() {
   const args = new Set(process.argv.slice(2));
-  const wantHooks = args.has('--hooks') || args.has('--hooks-only');
-  const wantStatusline = !args.has('--hooks-only') && !args.has('--no-statusline');
+  const wantSnapshot = !args.has('--no-snapshot') && !args.has('--hooks-only');
   const COPILOT_HOME = process.env.COPILOT_HOME || join(homedir(), '.copilot');
 
   console.log('Superpowers usage tracker installer');
-  if (wantStatusline) {
-    const p = installStatusline(COPILOT_HOME);
-    console.log(`  statusLine -> ${p}`);
-  }
-  if (wantHooks) {
-    const p = installHooksFile(COPILOT_HOME);
-    console.log(`  hooks      -> ${p}`);
+  const hooksPath = installHooksFile(COPILOT_HOME);
+  console.log(`  hooks            -> ${hooksPath}`);
+  if (wantSnapshot) {
+    const p = installSnapshot(COPILOT_HOME);
+    console.log(`  snapshot (hidden)-> ${p}`);
+    console.log('  (no visible status line; it only records AI-credit usage snapshots)');
   } else {
-    console.log('  hooks      -> (skipped; loaded from the plugin when installed via /plugin)');
-    console.log('               re-run with --hooks for a standalone install.');
+    console.log('  snapshot         -> (skipped; AI-credit usage will not be recorded)');
   }
   console.log('Restart Copilot CLI so the changes take effect.');
 }

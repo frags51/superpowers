@@ -4,9 +4,9 @@ import { applyInstall, applyUninstall, buildHooksConfig, HOOKS_FILE_NAME } from 
 
 test('applyInstall sets statusLine; applyUninstall restores', () => {
   const before = { theme: 'dark' };
-  const after = applyInstall({ ...before }, '/abs/statusline.js');
+  const after = applyInstall({ ...before }, '/abs/snapshot.js');
   assert.equal(after.statusLine.type, 'command');
-  assert.match(after.statusLine.command, /statusline\.js/);
+  assert.match(after.statusLine.command, /snapshot\.js/);
   assert.equal(after.theme, 'dark');
 
   const restored = applyUninstall({ ...after });

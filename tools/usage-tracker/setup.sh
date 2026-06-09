@@ -3,9 +3,10 @@
 # Remote installer for the Superpowers usage tracker.
 #
 # Downloads this tool (a clone of the frags51/superpowers fork) onto the current
-# machine and installs it into the GitHub Copilot CLI: wires the HUD statusline
-# and writes a self-contained hooks file so usage/subagent tracking runs WITHOUT
-# needing the full plugin installed via /plugin.
+# machine and installs it into the GitHub Copilot CLI: writes a self-contained
+# hooks file so usage/subagent tracking runs WITHOUT needing the full plugin
+# installed via /plugin, plus a headless usage-snapshot collector (no visible
+# status line) that records AI-credit usage.
 #
 # Usage (one-liner):
 #   curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.sh | bash
@@ -18,7 +19,7 @@
 #   SUPERPOWERS_USAGE_REPO  git URL to clone              (default: https://github.com/frags51/superpowers.git)
 #   SUPERPOWERS_USAGE_REF   branch/tag/commit to install  (default: ghcp-native)
 #   SUPERPOWERS_USAGE_SRC   where to clone the source     (default: $COPILOT_HOME/plugin-data/superpowers-usage/src)
-#   SUPERPOWERS_USAGE_NO_STATUSLINE=1  install hooks only (skip the statusline)
+#   SUPERPOWERS_USAGE_NO_SNAPSHOT=1   install hooks only (skip AI-credit snapshots)
 set -euo pipefail
 
 REPO_URL="${SUPERPOWERS_USAGE_REPO:-https://github.com/frags51/superpowers.git}"
@@ -68,9 +69,9 @@ log "Verifying the tracker runs here"
 node "$TOOL_DIR/tracker.js" --selftest
 
 # 4) Install into Copilot ----------------------------------------------------
-INSTALL_FLAGS="--hooks"
-if [ "${SUPERPOWERS_USAGE_NO_STATUSLINE:-0}" = "1" ]; then
-  INSTALL_FLAGS="--hooks-only"
+INSTALL_FLAGS=""
+if [ "${SUPERPOWERS_USAGE_NO_SNAPSHOT:-0}" = "1" ]; then
+  INSTALL_FLAGS="--no-snapshot"
 fi
 log "Installing into Copilot ($COPILOT_HOME)"
 COPILOT_HOME="$COPILOT_HOME" node "$TOOL_DIR/install.js" $INSTALL_FLAGS
@@ -86,10 +87,12 @@ $(printf '\033[1;32m✓ Superpowers usage tracker installed.\033[0m')
   database   : ${SUPERPOWERS_USAGE_DB:-$COPILOT_HOME/plugin-data/superpowers-usage/usage.db}
 
 Next steps:
-  1. Restart Copilot CLI so the hooks and statusline load.
-  2. List active subagents any time with:
+  1. Restart Copilot CLI so the hooks load (tracking is headless — no status line).
+  2. Open the dashboard (credit/time infographic + stats):
+       node "$TOOL_DIR/dashboard.js"      # then visit the printed URL
+  3. List active subagents any time with:
        node "$TOOL_DIR/subagents.js" --all
-  3. Uninstall with:
+  4. Uninstall with:
        COPILOT_HOME="$COPILOT_HOME" node "$TOOL_DIR/uninstall.js"
 
 EOF

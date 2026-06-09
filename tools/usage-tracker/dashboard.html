@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Superpowers Usage</title>
+<style>
+  :root {
+    --bg:#0f1419; --panel:#171c24; --panel2:#1e2530; --line:#2a3340;
+    --fg:#e6edf3; --muted:#8b97a7; --accent:#7aa2f7; --accent2:#9ece6a;
+    --credit:#e0af68; --bar:#2d3a52;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:var(--panel);
+    border-bottom:1px solid var(--line); padding:12px 18px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0; font-weight:650; }
+  .spacer { flex:1; }
+  button { background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:8px; padding:7px 14px; cursor:pointer; font-size:13px; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#0b0f16; border-color:var(--accent); font-weight:600; }
+  .tabs { display:flex; gap:6px; }
+  .tab { padding:6px 14px; border-radius:8px; cursor:pointer; color:var(--muted); }
+  .tab.active { background:var(--panel2); color:var(--fg); }
+  .meta { color:var(--muted); font-size:12px; }
+  main { padding:18px; max-width:1100px; margin:0 auto; }
+  .chips { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px; }
+  .chip { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 14px; }
+  .chip b { display:block; font-size:19px; }
+  .chip span { color:var(--muted); font-size:12px; }
+  details { background:var(--panel); border:1px solid var(--line); border-radius:10px; margin:8px 0; overflow:hidden; }
+  details > details { margin:8px; }
+  summary { cursor:pointer; padding:11px 14px; display:flex; align-items:center; gap:12px; list-style:none; }
+  summary::-webkit-details-marker { display:none; }
+  summary::before { content:"▸"; color:var(--muted); transition:transform .15s; }
+  details[open] > summary::before { transform:rotate(90deg); }
+  .name { font-weight:600; }
+  .name.sub { font-weight:500; }
+  .grow { flex:1; }
+  .nums { display:flex; gap:14px; align-items:center; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .nums .credit { color:var(--credit); }
+  .nums .dur { color:var(--accent2); }
+  .bar { height:6px; background:var(--bar); border-radius:4px; overflow:hidden; width:120px; }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+  .skill-row { display:flex; align-items:center; gap:12px; padding:8px 14px 8px 38px; border-top:1px solid var(--line); }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  td.num, th.num { text-align:right; }
+  h2 { font-size:14px; color:var(--muted); margin:24px 0 8px; text-transform:uppercase; letter-spacing:.05em; }
+  .tbar { display:inline-block; height:6px; background:var(--accent); border-radius:4px; vertical-align:middle; }
+  .empty { color:var(--muted); padding:40px; text-align:center; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ Superpowers Usage</h1>
+  <div class="tabs">
+    <div class="tab active" data-tab="usage">Usage</div>
+    <div class="tab" data-tab="stats">Stats</div>
+  </div>
+  <div class="spacer"></div>
+  <span class="meta" id="meta"></span>
+  <button class="primary" id="refresh">↻ Refresh</button>
+</header>
+<main>
+  <div class="chips" id="chips"></div>
+  <section id="view-usage"></section>
+  <section id="view-stats" class="hidden"></section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const sec = (ms) => (Number(ms||0)/1000).toFixed(1) + 's';
+const aiu = (v) => (Number(v||0)).toFixed(3);
+const num = (v) => Number(v||0).toLocaleString();
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pct = (v, max) => (max > 0 ? Math.max(2, Math.round((v/max)*100)) : 0);
+
+let activeTab = 'usage';
+
+function chips(t) {
+  const c = [
+    ['Sessions', num(t.sessions)], ['Tasks', num(t.tasks)], ['Phases', num(t.phases)],
+    ['Subagents', num(t.subagents)], ['AI credits', aiu(t.aiu) + ' AIU'],
+    ['Total time', sec(t.durationMs)], ['Tokens', num(t.tokens)],
+  ];
+  $('#chips').innerHTML = c.map(([k,v]) => `<div class="chip"><b>${v}</b><span>${k}</span></div>`).join('');
+}
+
+function nums(aiuVal, durMs) {
+  return `<span class="nums"><span class="credit">${aiu(aiuVal)} AIU</span>`
+       + `<span class="dur">${sec(durMs)}</span></span>`;
+}
+
+function renderUsage(tree) {
+  if (!tree.length) { $('#view-usage').innerHTML = '<div class="empty">No usage recorded yet.</div>'; return; }
+  const repoMax = Math.max(...tree.map(r => r.durationMs), 1);
+  $('#view-usage').innerHTML = tree.map((repo) => {
+    const brMax = Math.max(...repo.branches.map(b => b.durationMs), 1);
+    const branches = repo.branches.map((b) => {
+      const skMax = Math.max(...b.skills.map(s => s.durationMs), 1);
+      const skills = b.skills.map((s) => `
+        <div class="skill-row">
+          <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span></span>
+          <span class="bar"><i style="width:${pct(s.durationMs, skMax)}%"></i></span>
+          ${nums(s.aiu, s.durationMs)}
+        </div>`).join('');
+      return `<details open>
+        <summary>
+          <span class="name grow">🌿 ${esc(b.feature)}</span>
+          <span class="bar"><i style="width:${pct(b.durationMs, brMax)}%"></i></span>
+          ${nums(b.aiu, b.durationMs)}
+        </summary>${skills}</details>`;
+    }).join('');
+    return `<details open>
+      <summary>
+        <span class="name grow">📦 ${esc(repo.repo)}</span>
+        <span class="bar"><i style="width:${pct(repo.durationMs, repoMax)}%"></i></span>
+        ${nums(repo.aiu, repo.durationMs)}
+      </summary>${branches}</details>`;
+  }).join('');
+}
+
+function barCell(v, max) {
+  return `<span class="tbar" style="width:${pct(v, max)}px"></span>`;
+}
+
+function renderStats(r) {
+  const toolMax = Math.max(...r.tools.map(t => t.totalMs), 1);
+  const tools = r.tools.length ? `
+    <h2>Top tools</h2>
+    <table><tr><th>Tool</th><th class="num">Calls</th><th class="num">Total</th><th class="num">Avg</th><th class="num">Max</th><th></th></tr>
+    ${r.tools.map(t => `<tr>
+      <td>${esc(t.name)}</td><td class="num">${num(t.count)}</td>
+      <td class="num">${sec(t.totalMs)}</td><td class="num">${sec(t.avgMs)}</td><td class="num">${sec(t.maxMs)}</td>
+      <td>${barCell(t.totalMs, toolMax)}</td></tr>`).join('')}
+    </table>` : '';
+
+  const skMax = Math.max(...r.skills.map(s => s.totalMs), 1);
+  const skills = r.skills.length ? `
+    <h2>Superpowers phases (skills)</h2>
+    <table><tr><th>Skill</th><th class="num">Runs</th><th class="num">Total</th><th class="num">Avg</th><th class="num">Credits</th><th class="num">Tokens</th><th></th></tr>
+    ${r.skills.map(s => `<tr>
+      <td>${esc(s.skill)}</td><td class="num">${num(s.count)}</td>
+      <td class="num">${sec(s.totalMs)}</td><td class="num">${sec(s.avgMs)}</td>
+      <td class="num">${aiu(s.aiu)}</td><td class="num">${num(s.tokens)}</td>
+      <td>${barCell(s.totalMs, skMax)}</td></tr>`).join('')}
+    </table>` : '';
+
+  const subs = r.subagents.length ? `
+    <h2>Subagents</h2>
+    <table><tr><th>Agent</th><th class="num">Total</th><th class="num">Running</th><th class="num">Avg (reliable)</th></tr>
+    ${r.subagents.map(a => `<tr>
+      <td>${esc(a.name)}</td><td class="num">${num(a.count)}</td><td class="num">${num(a.running)}</td>
+      <td class="num">${a.avgMs == null ? '—' : sec(a.avgMs)}</td></tr>`).join('')}
+    </table>` : '';
+
+  const body = tools + skills + subs;
+  $('#view-stats').innerHTML = body || '<div class="empty">No stats yet.</div>';
+}
+
+async function load() {
+  $('#refresh').disabled = true;
+  $('#meta').textContent = 'loading…';
+  try {
+    const r = await (await fetch('/api/report?t=' + Date.now())).json();
+    chips(r.totals);
+    renderUsage(r.tree);
+    renderStats(r);
+    const when = new Date(r.generatedAt).toLocaleTimeString();
+    $('#meta').textContent = `${r.dbPath || ''} · updated ${when}`;
+  } catch (e) {
+    $('#meta').textContent = 'error: ' + e.message;
+  } finally {
+    $('#refresh').disabled = false;
+  }
+}
+
+function setTab(name) {
+  activeTab = name;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  $('#view-usage').classList.toggle('hidden', name !== 'usage');
+  $('#view-stats').classList.toggle('hidden', name !== 'stats');
+}
+
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => setTab(t.dataset.tab)));
+$('#refresh').addEventListener('click', load);
+load();
+</script>
+</body>
+</html>
