@@ -27,11 +27,11 @@
   .meta { color:var(--muted); font-size:12px; }
   .range { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .range label { color:var(--muted); font-size:12px; }
-  select, input[type="date"] { background:var(--panel2); color:var(--fg);
+  select, input[type="date"], input[type="datetime-local"] { background:var(--panel2); color:var(--fg);
     border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-size:13px;
     font-family:inherit; }
-  select:hover, input[type="date"]:hover { border-color:var(--accent); }
-  input[type="date"] { color-scheme:dark; }
+  select:hover, input[type="date"]:hover, input[type="datetime-local"]:hover { border-color:var(--accent); }
+  input[type="date"], input[type="datetime-local"] { color-scheme:dark; }
   .ts { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
   main { padding:18px; max-width:1100px; margin:0 auto; }
   .chips { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px; }
@@ -60,6 +60,15 @@
   h2 { font-size:14px; color:var(--muted); margin:24px 0 8px; text-transform:uppercase; letter-spacing:.05em; }
   .tbar { display:inline-block; height:6px; background:var(--accent); border-radius:4px; vertical-align:middle; }
   .empty { color:var(--muted); padding:40px; text-align:center; }
+  .callout { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent);
+    border-radius:10px; padding:11px 14px; margin:0 0 14px; color:var(--muted); font-size:12.5px; }
+  .callout summary { padding:0; gap:8px; color:var(--fg); font-weight:600; }
+  .callout[open] { padding-bottom:6px; }
+  .callout dl { margin:10px 0 2px; display:grid; grid-template-columns:auto 1fr; gap:4px 12px; }
+  .callout dt { color:var(--fg); font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .callout dd { margin:0; }
+  .callout code { background:var(--panel2); border:1px solid var(--line); border-radius:5px;
+    padding:1px 5px; color:var(--fg); font-size:12px; }
   .hidden { display:none; }
 </style>
 </head>
@@ -75,15 +84,16 @@
     <label for="range-preset">Timeline</label>
     <select id="range-preset">
       <option value="all">All time</option>
+      <option value="1h">Last 1 hour</option>
       <option value="1d">Last 1 day</option>
       <option value="1w">Last 1 week</option>
       <option value="1m">Last 1 month</option>
       <option value="custom">Custom range</option>
     </select>
     <span id="custom-range" class="hidden">
-      <input type="date" id="range-from" aria-label="From date" />
+      <input type="datetime-local" id="range-from" aria-label="From date and time" />
       <span class="meta">→</span>
-      <input type="date" id="range-to" aria-label="To date" />
+      <input type="datetime-local" id="range-to" aria-label="To date and time" />
     </span>
   </div>
   <span class="meta" id="meta"></span>
@@ -125,10 +135,34 @@ function nums(aiuVal, durMs) {
        + `<span class="dur">${sec(durMs)}</span></span>`;
 }
 
+function legend() {
+  return `<details class="callout">
+    <summary>What do these labels mean?</summary>
+    <p>The tree breaks usage down as <b>📦 repo → 🌿 branch → phase</b>. The git
+      repo and branch come from where the agent is working; each phase is a
+      <code>skill</code> activation (or the implicit root work in between).</p>
+    <dl>
+      <dt>📦 <code>(unknown repo)</code></dt>
+      <dd>No git repository could be detected for the session's working directory.</dd>
+      <dt>🌿 branch name</dt>
+      <dd>The git branch the work was attributed to (the session's branch, or a
+        git worktree's branch if the agent wrote into one).</dd>
+      <dt>🌿 <code>(no branch)</code></dt>
+      <dd>No git branch could be detected (e.g. detached HEAD or a non-git directory).</dd>
+      <dt><code>(root)</code></dt>
+      <dd>Work in a task <i>outside</i> any superpowers skill — the implicit root
+        phase that runs before, between, and after skill activations.</dd>
+      <dt><code>unknown</code></dt>
+      <dd>A skill was activated but its name could not be resolved from the tool
+        call, so it is recorded under this placeholder.</dd>
+    </dl>
+  </details>`;
+}
+
 function renderUsage(tree) {
-  if (!tree.length) { $('#view-usage').innerHTML = '<div class="empty">No usage recorded yet.</div>'; return; }
+  if (!tree.length) { $('#view-usage').innerHTML = legend() + '<div class="empty">No usage recorded yet.</div>'; return; }
   const repoMax = Math.max(...tree.map(r => r.durationMs), 1);
-  $('#view-usage').innerHTML = tree.map((repo) => {
+  $('#view-usage').innerHTML = legend() + tree.map((repo) => {
     const brMax = Math.max(...repo.branches.map(b => b.durationMs), 1);
     const branches = repo.branches.map((b) => {
       const skMax = Math.max(...b.skills.map(s => s.durationMs), 1);
@@ -201,24 +235,32 @@ function renderStats(r) {
 function currentRange() {
   const preset = $('#range-preset').value;
   const now = Date.now();
+  const HOUR = 3600000;
   const DAY = 86400000;
+  if (preset === '1h') return { from: now - HOUR, to: null };
   if (preset === '1d') return { from: now - DAY, to: null };
   if (preset === '1w') return { from: now - 7 * DAY, to: null };
   if (preset === '1m') return { from: now - 30 * DAY, to: null };
   if (preset === 'custom') {
     const fromVal = $('#range-from').value;
     const toVal = $('#range-to').value;
-    // Custom dates are inclusive: end at the final millisecond of the "to" day.
-    const from = fromVal ? new Date(fromVal + 'T00:00:00').getTime() : null;
-    const to = toVal ? new Date(toVal + 'T23:59:59.999').getTime() : null;
-    return { from, to };
+    // datetime-local values ("YYYY-MM-DDTHH:MM") parse as local time.
+    const from = fromVal ? new Date(fromVal).getTime() : null;
+    const to = toVal ? new Date(toVal).getTime() : null;
+    return {
+      from: Number.isFinite(from) ? from : null,
+      to: Number.isFinite(to) ? to : null,
+    };
   }
   return { from: null, to: null };
 }
 
 function rangeLabel(range) {
-  const f = range.from != null ? new Date(range.from).toLocaleDateString() : null;
-  const t = range.to != null ? new Date(range.to).toLocaleDateString() : null;
+  const fmt = (ms) => new Date(ms).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+  const f = range.from != null ? fmt(range.from) : null;
+  const t = range.to != null ? fmt(range.to) : null;
   if (!f && !t) return 'all time';
   if (f && !t) return `since ${f}`;
   if (!f && t) return `through ${t}`;
