@@ -282,6 +282,39 @@ cd vendor/superpowers && node --test 'tools/usage-tracker/test/*.test.js'
 node tools/usage-tracker/tracker.js --selftest
 ```
 
+## Performance
+
+A minimal, zero-dependency benchmark of the hot paths:
+
+```bash
+node tools/usage-tracker/bench.js          # human-readable table
+node tools/usage-tracker/bench.js --json   # machine-readable
+node tools/usage-tracker/bench.js --quick  # fewer iterations
+```
+
+It measures three things:
+
+1. **In-process `handle()` per event** — the tracker logic alone.
+2. **Subprocess hook latency** — `node tracker.js preToolUse` and `node
+   snapshot.js` end-to-end (the real per-call cost; spawned fresh per hook).
+3. **`buildReport()`** over a seeded DB (the on-demand dashboard/report cost).
+
+Indicative results (Node 25, warm disk; absolute numbers vary by machine):
+
+| Path | median | notes |
+|------|-------:|-------|
+| `handle('preToolUse')` | ~0.6 ms | includes worktree-branch resolution |
+| `handle('postToolUse')` | ~0.3 ms | span close |
+| `handle('userPromptSubmitted')` | ~1.4 ms | closes prior task, finalizes phases |
+| `tracker.js preToolUse` (subprocess) | ~48 ms | **dominated by Node startup (~46 ms)** |
+| `snapshot.js` (subprocess) | ~47 ms | same; Node startup dominates |
+| `buildReport()` over 800 phases / 4800 spans | ~1.3 ms | on demand only |
+
+**Takeaway:** the tracker's own work is sub-millisecond per hook; the
+user-visible cost is the fixed Node process-startup tax (~46 ms) that any
+hook-based tool pays. The DB work and the worktree-branch reattribution add
+well under 1 ms, and the hooks are fail-open so they never block a tool.
+
 ## Known limitations
 
 - **Subagent pairing:** `subagentStop` carries no agent id. When multiple
