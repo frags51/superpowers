@@ -29,15 +29,17 @@ BASE_SHA=$(git rev-parse HEAD~1)  # or origin/main
 HEAD_SHA=$(git rev-parse HEAD)
 ```
 
-**2. Dispatch code reviewer subagent:**
+**2. Dispatch the code reviewer agent:**
 
-Use Task tool with `general-purpose` type, fill template at `code-reviewer.md`
+Use the `task` tool with `agent_type: "superpowers:code-quality-reviewer"`. Provide the placeholders below in the task prompt.
 
 **Placeholders:**
 - `{DESCRIPTION}` - Brief summary of what you built
 - `{PLAN_OR_REQUIREMENTS}` - What it should do
 - `{BASE_SHA}` - Starting commit
 - `{HEAD_SHA}` - Ending commit
+
+**Copilot CLI shortcuts:** for a quick pass you can also run the built-in `/review` command, or dispatch the `code-review` agent type via the `task` tool. When the change is on a branch with a PR, the GitHub MCP tools (`github-mcp-server-*`) can pull PR files, diffs, and existing review threads for context.
 
 **3. Act on feedback:**
 - Fix Critical issues immediately
@@ -100,4 +102,4 @@ You: [Fix progress indicators]
 - Show code/tests that prove it works
 - Request clarification
 
-See template at: requesting-code-review/code-reviewer.md
+The reviewer agent is `superpowers:code-quality-reviewer` (see `agents/code-quality-reviewer.md`).
