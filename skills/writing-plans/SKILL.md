@@ -131,6 +131,8 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
 
+For a deeper independent pass, you may dispatch the `superpowers:plan-document-reviewer` agent (via the `task` tool) on the finished plan and fix anything it surfaces.
+
 ## Execution Handoff
 
 After saving the plan, offer execution choice:

@@ -123,6 +123,8 @@ After writing the spec document, look at it with fresh eyes:
 
 Fix any issues inline. No need to re-review — just fix and move on.
 
+For a deeper independent pass, you may dispatch the `superpowers:spec-document-reviewer` agent (via the `task` tool) on the written spec and fold its findings in before the user review gate.
+
 **User Review Gate:**
 After the spec review loop passes, ask the user to review the written spec before proceeding:
 
