@@ -1,6 +1,6 @@
 // SQLite helper for the usage tracker.
 // Prefers node:sqlite; falls back to the sqlite3 CLI when unavailable.
-import { readFileSync, mkdirSync, realpathSync } from 'node:fs';
+import { readFileSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -109,4 +109,26 @@ export const gitBranch = (cwd) => git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']
 export const gitRepo = (cwd) => {
   const top = git(cwd, ['rev-parse', '--show-toplevel']);
   return top ? top.split('/').pop() : null;
+};
+
+// Nearest existing ancestor directory of `p` (which may be a not-yet-created
+// file/dir). Returns null if none can be found.
+function nearestExistingDir(p) {
+  let d = p;
+  for (let i = 0; i < 64 && d; i++) {
+    try { if (statSync(d).isDirectory()) return d; } catch { /* try parent */ }
+    const parent = dirname(d);
+    if (parent === d) break;
+    d = parent;
+  }
+  return null;
+}
+
+// Git branch for an arbitrary path (file or directory, possibly not yet on
+// disk). Climbs to the nearest existing directory first so that editing or
+// creating a brand-new file inside a worktree still resolves the worktree's
+// branch.
+export const gitBranchForPath = (p) => {
+  const dir = nearestExistingDir(p);
+  return dir ? gitBranch(dir) : null;
 };

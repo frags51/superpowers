@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { openDb } from '../db.js';
 import { handle } from '../tracker.js';
@@ -179,6 +180,148 @@ test('skill phase detected from toolArgs (real CLI field name)', () => {
   } finally {
     db.close();
     rmSync(path, { force: true });
+  }
+});
+
+// Sessions start in `master` but the agent creates a git worktree on a feature
+// branch and works there. The session cwd never changes, so the branch must be
+// inferred from where the agent actually writes (edit/create paths, bash `cd`).
+const wtOpts = (mapping, over = {}) => ({
+  env: {},
+  resolveFeature: () => 'master',
+  resolveRepo: () => 'agentharness',
+  resolveFeatureForDir: (dir) => {
+    for (const [needle, branch] of Object.entries(mapping)) {
+      if (dir.includes(needle)) return branch;
+    }
+    return 'master';
+  },
+  transcriptPath: null,
+  ...over,
+});
+
+test('edit into a worktree path re-attributes the task and its phases', () => {
+  const { db, path } = freshDb();
+  try {
+    const sid = 's-wt-1';
+    const o = wtOpts({ '/wt/feat-x': 'feat-x' });
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: '/repo' }, db, o);
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: '/repo', prompt: 'p' }, db, o);
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: '/repo', toolName: 'edit', toolArgs: { path: '/wt/feat-x/src/a.js' } }, db, o);
+
+    const task = db.get('SELECT * FROM tasks WHERE session_id=?', [sid]);
+    assert.equal(task.feature, 'feat-x');
+    const phases = db.all('SELECT feature FROM phases WHERE task_id=?', [task.task_id]);
+    assert.ok(phases.length >= 1);
+    for (const ph of phases) assert.equal(ph.feature, 'feat-x');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+test('bash `cd` into a worktree re-attributes the branch', () => {
+  const { db, path } = freshDb();
+  try {
+    const sid = 's-wt-2';
+    const o = wtOpts({ '/wt/feat-y': 'feat-y' });
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: '/repo' }, db, o);
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: '/repo', prompt: 'p' }, db, o);
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: '/repo', toolName: 'bash', toolArgs: { command: 'cd /wt/feat-y && npm test' } }, db, o);
+
+    const task = db.get('SELECT * FROM tasks WHERE session_id=?', [sid]);
+    assert.equal(task.feature, 'feat-y');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+test('a read (view) in another branch does not move the feature', () => {
+  const { db, path } = freshDb();
+  try {
+    const sid = 's-wt-3';
+    const o = wtOpts({ '/wt/feat-z': 'feat-z' });
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: '/repo' }, db, o);
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: '/repo', prompt: 'p' }, db, o);
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: '/repo', toolName: 'view', toolArgs: { path: '/wt/feat-z/a.js' } }, db, o);
+
+    const task = db.get('SELECT * FROM tasks WHERE session_id=?', [sid]);
+    assert.equal(task.feature, 'master');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+test('attribution is sticky: a later write back in the session branch does not flip it', () => {
+  const { db, path } = freshDb();
+  try {
+    const sid = 's-wt-4';
+    const o = wtOpts({ '/wt/feat-x': 'feat-x' });
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: '/repo' }, db, o);
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: '/repo', prompt: 'p' }, db, o);
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: '/repo', toolName: 'edit', toolArgs: { path: '/wt/feat-x/src/a.js' } }, db, o);
+    // later, bump a submodule pointer back in the master checkout
+    handle('preToolUse', { sessionId: sid, timestamp: 200, cwd: '/repo', toolName: 'edit', toolArgs: { path: '/repo/sub' } }, db, o);
+
+    const task = db.get('SELECT * FROM tasks WHERE session_id=?', [sid]);
+    assert.equal(task.feature, 'feat-x');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+test('writing in the session branch never changes the feature', () => {
+  const { db, path } = freshDb();
+  try {
+    const sid = 's-wt-5';
+    const o = wtOpts({}); // everything resolves to 'master'
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: '/repo' }, db, o);
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: '/repo', prompt: 'p' }, db, o);
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: '/repo', toolName: 'edit', toolArgs: { path: '/repo/src/a.js' } }, db, o);
+
+    const task = db.get('SELECT * FROM tasks WHERE session_id=?', [sid]);
+    assert.equal(task.feature, 'master');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+// End-to-end with the REAL default resolver (no injection) against a real git
+// worktree. Proves the branch is resolved even for a not-yet-created file/dir
+// inside the worktree (the resolver climbs to the nearest existing ancestor).
+test('real worktree: editing a new file under a worktree re-attributes the branch', () => {
+  const { db, path } = freshDb();
+  const root = mkdtempSync(join(tmpdir(), 'sp-wt-'));
+  const git = (cwd, args) => execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
+  try {
+    const repo = join(root, 'repo');
+    execFileSync('git', ['init', '-q', '-b', 'master', repo]);
+    git(repo, ['config', 'user.email', 't@t']);
+    git(repo, ['config', 'user.name', 't']);
+    writeFileSync(join(repo, 'f'), 'a');
+    git(repo, ['add', '.']);
+    git(repo, ['commit', '-qm', 'init']);
+    const wt = join(root, 'wt-featx');
+    git(repo, ['worktree', 'add', '-q', wt, '-b', 'feat-x']);
+
+    const sid = 's-wt-real';
+    const o = { env: {} }; // default resolvers => real git
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: repo }, db, o);
+    assert.equal(db.get('SELECT branch FROM sessions WHERE session_id=?', [sid]).branch, 'master');
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: repo, prompt: 'p' }, db, o);
+    // src/ does not exist yet in the worktree — resolver must climb to wt root.
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: repo, toolName: 'edit', toolArgs: { path: join(wt, 'src', 'a.js') } }, db, o);
+
+    const task = db.get('SELECT feature FROM tasks WHERE session_id=?', [sid]);
+    assert.equal(task.feature, 'feat-x');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

@@ -2,10 +2,10 @@
 // Invoked per hook as a fresh process: `node tracker.js <event>` with the
 // hook JSON payload on stdin. All "current" state is derived from the DB.
 import { readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  openDb, defaultDbPath, nowMs, genId, gitBranch, gitRepo, isMainModule,
+  openDb, defaultDbPath, nowMs, genId, gitBranch, gitRepo, gitBranchForPath, isMainModule,
 } from './db.js';
 import { snapshotDelta, sumOutputTokens, toolMatchKey } from './usage.js';
 
@@ -21,6 +21,7 @@ function normalizeOpts(o = {}) {
   return {
     env,
     resolveFeature: o.resolveFeature || ((cwd) => gitBranch(cwd)),
+    resolveFeatureForDir: o.resolveFeatureForDir || ((dir) => gitBranchForPath(dir)),
     resolveRepo: o.resolveRepo || ((cwd) => gitRepo(cwd)),
     transcriptPath: o.transcriptPath || null,
     resolveTranscript: o.resolveTranscript || ((s) => defaultTranscript(s, env)),
@@ -33,6 +34,50 @@ const ts = (p) => (typeof p.timestamp === 'number' ? p.timestamp : nowMs());
 // Copilot CLI tool hooks deliver arguments under `toolArgs`; accept the older
 // `toolInput`/`arguments` shapes too for robustness.
 const toolArgsOf = (p) => (p.toolArgs ?? p.toolInput ?? p.arguments ?? {});
+
+// Tools that express "I am working here": file writers and shell `cd`. Reads
+// (view/grep/glob) are deliberately excluded so that incidentally reading a
+// file outside the worktree never redefines the task's branch.
+const WORK_TOOLS = new Set(['edit', 'create', 'bash']);
+
+// Best-effort working directory for a work-defining tool call. Returns null when
+// no directory can be inferred (caller then leaves the feature untouched).
+function workDirFromArgs(toolName, args) {
+  if (!args || typeof args !== 'object') return null;
+  if (typeof args.path === 'string' && args.path) return dirname(args.path);
+  if (toolName === 'bash' && typeof args.command === 'string') {
+    const m = args.command.match(/\bcd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/);
+    if (m) return m[1] || m[2] || m[3] || null;
+  }
+  return null;
+}
+
+// Resolve the git branch of the directory a work-defining tool acts on. Used to
+// follow the agent into a git worktree even though the session cwd never moves.
+function detectWorkBranch(toolName, args, opts) {
+  if (!WORK_TOOLS.has(toolName)) return null;
+  const dir = workDirFromArgs(toolName, args);
+  if (!dir) return null;
+  try {
+    return opts.resolveFeatureForDir(dir);
+  } catch {
+    return null;
+  }
+}
+
+// Re-attribute a task (and all its phases) to the branch the agent is actually
+// working in. Sticky away from the session branch: a worktree branch wins and a
+// later write back in the session branch (e.g. a submodule bump) won't flip it.
+function reconcileFeature(db, task, s, toolName, args, opts) {
+  const branch = detectWorkBranch(toolName, args, opts);
+  if (!branch) return;
+  const sess = db.get('SELECT branch FROM sessions WHERE session_id=?', [s]);
+  const sessionBranch = sess ? sess.branch : null;
+  if (branch === sessionBranch) return;
+  if (branch === task.feature) return;
+  db.run('UPDATE tasks SET feature=? WHERE task_id=?', [branch, task.task_id]);
+  db.run('UPDATE phases SET feature=? WHERE task_id=?', [branch, task.task_id]);
+}
 
 function activeTask(db, s) {
   return db.get('SELECT * FROM tasks WHERE session_id=? AND ended_at IS NULL ORDER BY turn_index DESC LIMIT 1', [s]);
@@ -173,6 +218,7 @@ const HANDLERS = {
     const task = ensureActiveTask(db, s, p, opts);
     const toolName = p.toolName;
     const input = toolArgsOf(p);
+    reconcileFeature(db, task, s, toolName, input, opts);
     if (toolName === 'skill') {
       const cur = activePhase(db, s);
       if (cur) closePhase(db, cur, at, opts);

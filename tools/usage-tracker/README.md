@@ -11,8 +11,16 @@ and what each is working on**.
 
 The Copilot CLI fires lifecycle hooks; `tracker.js` turns them into rows:
 
-- **sessions** — one per CLI session (cwd, repo, branch, model).
-- **tasks** — one per user-prompt turn. `feature` = the git branch.
+- **sessions** — one per CLI session (cwd, repo, branch, model). `branch` is the
+  branch of the session's `cwd` at start.
+- **tasks** — one per user-prompt turn. `feature` = the git branch the task works
+  in. It starts as the session branch, but if the agent writes into a different
+  git **worktree** during the task (detected from `edit`/`create` paths or a
+  `bash` `cd`), the task and its phases are re-attributed to that worktree's
+  branch. This keeps the dashboard's `repo → branch → skill` tree drillable when
+  a session spawns worktrees instead of switching `cwd`. Reads never move the
+  branch, and once a task is attributed to a worktree branch a later write back
+  in the session branch will not flip it.
 - **phases** — one per `skill` activation (brainstorming, writing-plans,
   requesting-code-review, …) plus an implicit `root` phase per task. Carries the
   AI-credit/premium/cost deltas and output-token sums for that phase.
