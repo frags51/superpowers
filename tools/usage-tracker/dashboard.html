@@ -77,6 +77,7 @@
   <h1>⚡ Superpowers Usage</h1>
   <div class="tabs">
     <div class="tab active" data-tab="usage">Usage</div>
+    <div class="tab" data-tab="sessions">Sessions</div>
     <div class="tab" data-tab="stats">Stats</div>
   </div>
   <div class="spacer"></div>
@@ -102,6 +103,7 @@
 <main>
   <div class="chips" id="chips"></div>
   <section id="view-usage"></section>
+  <section id="view-sessions" class="hidden"></section>
   <section id="view-stats" class="hidden"></section>
 </main>
 
@@ -186,6 +188,49 @@ function renderUsage(tree) {
         <span class="bar"><i style="width:${pct(repo.durationMs, repoMax)}%"></i></span>
         ${nums(repo.aiu, repo.durationMs)}
       </summary>${branches}</details>`;
+  }).join('');
+}
+
+function sessionsLegend() {
+  return `<details class="callout">
+    <summary>What does this view show?</summary>
+    <p>One entry per <b>🧵 session</b> (a single agent run), newest first. Each
+      session shows its git <b>repo / branch</b> and model, with the <code>skill</code>
+      phases it ran underneath — AI credit usage, duration (in seconds), and the
+      <b>start time</b> at each level.</p>
+    <dl>
+      <dt>🧵 <code>(unknown repo)</code> / <code>(no branch)</code></dt>
+      <dd>No git repository or branch could be detected for the session.</dd>
+      <dt><code>(root)</code></dt>
+      <dd>Work in a task <i>outside</i> any superpowers skill — the implicit root
+        phase that runs before, between, and after skill activations.</dd>
+      <dt><code>unknown</code></dt>
+      <dd>A skill was activated but its name could not be resolved from the tool
+        call, so it is recorded under this placeholder.</dd>
+    </dl>
+  </details>`;
+}
+
+function renderSessions(sessions) {
+  if (!sessions.length) { $('#view-sessions').innerHTML = sessionsLegend() + '<div class="empty">No sessions recorded yet.</div>'; return; }
+  const seMax = Math.max(...sessions.map(s => s.durationMs), 1);
+  $('#view-sessions').innerHTML = sessionsLegend() + sessions.map((se) => {
+    const skMax = Math.max(...se.skills.map(s => s.durationMs), 1);
+    const skills = se.skills.map((s) => `
+      <div class="skill-row">
+        <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
+          <span class="ts">· started ${ts(s.firstAt)}</span></span>
+        <span class="bar"><i style="width:${pct(s.durationMs, skMax)}%"></i></span>
+        ${nums(s.aiu, s.durationMs)}
+      </div>`).join('');
+    const model = se.model ? ` <span class="meta">· ${esc(se.model)}</span>` : '';
+    return `<details open>
+      <summary>
+        <span class="name grow">🧵 ${esc(se.repo)} / ${esc(se.branch)}${model}
+          <span class="ts">· started ${ts(se.startedAt ?? se.firstAt)}</span></span>
+        <span class="bar"><i style="width:${pct(se.durationMs, seMax)}%"></i></span>
+        ${nums(se.aiu, se.durationMs)}
+      </summary>${skills}</details>`;
   }).join('');
 }
 
@@ -278,6 +323,7 @@ async function load() {
     const r = await (await fetch('/api/report?' + qs.toString())).json();
     chips(r.totals);
     renderUsage(r.tree);
+    renderSessions(r.sessions);
     renderStats(r);
     const when = new Date(r.generatedAt).toLocaleTimeString();
     $('#meta').textContent = `${r.dbPath || ''} · ${rangeLabel(range)} · updated ${when}`;
@@ -292,6 +338,7 @@ function setTab(name) {
   activeTab = name;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   $('#view-usage').classList.toggle('hidden', name !== 'usage');
+  $('#view-sessions').classList.toggle('hidden', name !== 'sessions');
   $('#view-stats').classList.toggle('hidden', name !== 'stats');
 }
 

@@ -57,6 +57,30 @@ test('buildReport tree: repo -> branch -> skill with credits + duration', () => 
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 
+test('buildReport sessions: session -> skill with identity + credits + duration', () => {
+  const { db, path } = seed();
+  try {
+    const r = buildReport(db);
+    assert.equal(r.sessions.length, 2);                 // two sessions
+    const byId = Object.fromEntries(r.sessions.map((s) => [s.sessionId, s]));
+
+    const s1 = byId['s1'];
+    assert.equal(s1.repo, 'agentharness');
+    assert.equal(s1.branch, 'feat-a');
+    assert.equal(s1.durationMs, 8000);                  // p1 (5000) + p2 (3000)
+    assert.equal(Math.round(s1.aiu * 100), 30);         // 0.10 + 0.20
+    assert.equal(s1.tokens, 150);                       // 100 + 50
+    const s1skills = s1.skills.map((s) => s.skill).sort();
+    assert.deepEqual(s1skills, ['brainstorming', 'writing-plans']);
+
+    const s2 = byId['s2'];
+    assert.equal(s2.branch, 'feat-b');
+    assert.equal(s2.durationMs, 2000);
+    assert.equal(s2.skills[0].skill, 'brainstorming');
+    assert.equal(s2.skills[0].durationMs, 2000);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
 test('buildReport tools aggregates count + durations', () => {
   const { db, path } = seed();
   try {
@@ -81,6 +105,34 @@ test('buildReport skills (phase analysis) + subagents', () => {
     assert.equal(explore.running, 1);
     assert.equal(explore.reliable, 1);
     assert.equal(explore.avgMs, 1500);            // reliable-only avg
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+test('buildReport sessions: orphan phase (no sessions row) uses placeholders and firstAt sort key', () => {
+  const path = join(tmpdir(), `sp-report-${randomUUID()}.db`);
+  const db = openDb(path);
+  const T0 = 1_000_000_000_000;
+  const HOUR = 3_600_000;
+  try {
+    // s1 has a real sessions row; 'orphan' has phases but no sessions row, and
+    // its only activity is more recent than s1's session start.
+    db.run(`INSERT INTO sessions (session_id, repo, branch, model, started_at) VALUES ('s1','agentharness','feat-a','claude',${T0})`);
+    db.run(`INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, duration_ms, aiu_delta, total_tokens, status) VALUES ('p1','s1:0','s1','feat-a','brainstorming','skill',1,${T0},5000,0.1,100,'closed')`);
+    db.run(`INSERT INTO phases (phase_id, task_id, session_id, skill, kind, seq, started_at, duration_ms, aiu_delta, total_tokens, status) VALUES ('p2','orphan:0','orphan','writing-plans','skill',1,${T0 + 2 * HOUR},3000,0.2,50,'closed')`);
+
+    const r = buildReport(db);
+    assert.equal(r.sessions.length, 2);
+
+    // Orphan rolls up under placeholders with no model/start time.
+    const orphan = r.sessions.find((s) => s.sessionId === 'orphan');
+    assert.equal(orphan.repo, '(unknown repo)');
+    assert.equal(orphan.branch, '(no branch)');
+    assert.equal(orphan.model, null);
+    assert.equal(orphan.startedAt, null);
+    assert.equal(orphan.firstAt, T0 + 2 * HOUR);
+
+    // With startedAt null, the orphan sorts by firstAt — most recent first.
+    assert.deepEqual(r.sessions.map((s) => s.sessionId), ['orphan', 's1']);
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 
@@ -121,6 +173,21 @@ test('buildReport range filter restricts every section to the window', () => {
     assert.equal(brainstorm.count, 1);
     const explore = r.subagents.find((s) => s.name === 'explore');
     assert.equal(explore.count, 1);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+test('buildReport sessions sort most-recent-first and honor the range filter', () => {
+  const { db, path, T0, HOUR } = seedTimed();
+  try {
+    const all = buildReport(db);
+    assert.deepEqual(all.sessions.map((s) => s.sessionId), ['s2', 's1']); // recent first
+    assert.equal(all.sessions[0].startedAt, T0 + HOUR);
+
+    // Window covering only the recent session (s2).
+    const r = buildReport(db, { from: T0 + HOUR - 1, to: T0 + HOUR + 1 });
+    assert.equal(r.sessions.length, 1);
+    assert.equal(r.sessions[0].sessionId, 's2');
+    assert.equal(r.sessions[0].durationMs, 3000);
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 

@@ -5,6 +5,7 @@
 //   - tools:  tool-use counts and durations
 //   - skills: superpowers phase analysis (per skill)
 //   - subagents: per agent_name counts and (reliable) durations
+//   - sessions: per session(id) identity + skill(phase) breakdown
 //   - totals: headline numbers
 //
 // Durations are milliseconds in the data; the UI formats them as seconds.
@@ -89,6 +90,49 @@ export function buildReport(db, opts = {}) {
       .sort((a, z) => z.durationMs - a.durationMs),
   })).sort((a, z) => z.durationMs - a.durationMs);
 
+  // --- Sessions: session -> skill(phase) -------------------------------------
+  // Branch/repo here come from the session's own identity (sessions table), not
+  // from phase `feature` like the tree above — so a session that writes into a
+  // worktree on another branch shows its session branch here, by design.
+  const sessRows = db.all(`
+    SELECT p.session_id                          AS session_id,
+           COALESCE(s.repo, '(unknown repo)')    AS repo,
+           COALESCE(s.branch, '(no branch)')     AS branch,
+           s.model                               AS model,
+           s.started_at                          AS session_started,
+           s.ended_at                            AS session_ended,
+           s.end_reason                          AS end_reason,
+           COALESCE(p.skill, '(root)')           AS skill,
+           COUNT(*)                              AS n,
+           COALESCE(SUM(p.aiu_delta), 0)         AS aiu,
+           COALESCE(SUM(p.duration_ms), 0)       AS duration_ms,
+           COALESCE(SUM(p.total_tokens), 0)      AS tokens,
+           MIN(p.started_at)                     AS first_at,
+           MAX(p.started_at)                     AS last_at
+    FROM phases p
+    LEFT JOIN sessions s ON p.session_id = s.session_id${r.where('p.started_at')}
+    GROUP BY p.session_id, skill`);
+
+  const sessMap = new Map();
+  for (const row of sessRows) {
+    let se = sessMap.get(row.session_id);
+    if (!se) {
+      se = {
+        sessionId: row.session_id, repo: row.repo, branch: row.branch, model: row.model,
+        startedAt: ts(row.session_started), endedAt: ts(row.session_ended), endReason: row.end_reason,
+        aiu: 0, durationMs: 0, tokens: 0, firstAt: null, lastAt: null, skills: [],
+      };
+      sessMap.set(row.session_id, se);
+    }
+    const first = ts(row.first_at); const last = ts(row.last_at);
+    se.skills.push({ skill: row.skill, count: n(row.n), aiu: n(row.aiu), durationMs: n(row.duration_ms), tokens: n(row.tokens), firstAt: first, lastAt: last });
+    se.aiu += n(row.aiu); se.durationMs += n(row.duration_ms); se.tokens += n(row.tokens);
+    se.firstAt = minT(se.firstAt, first); se.lastAt = maxT(se.lastAt, last);
+  }
+  const sessions = [...sessMap.values()].map((se) => ({
+    ...se, skills: se.skills.sort((a, z) => z.durationMs - a.durationMs),
+  })).sort((a, z) => (z.startedAt ?? z.firstAt ?? 0) - (a.startedAt ?? a.firstAt ?? 0));
+
   // --- Top tools -------------------------------------------------------------
   const tools = db.all(`
     SELECT name,
@@ -146,7 +190,7 @@ export function buildReport(db, opts = {}) {
       subagents: n(totals.subagents), durationMs: n(totals.duration_ms),
       aiu: n(totals.aiu), premium: n(totals.premium), tokens: n(totals.tokens),
     },
-    tree, tools, skills, subagents,
+    tree, tools, skills, subagents, sessions,
   };
 }
 

@@ -50,7 +50,7 @@ A zero-dependency local web UI to explore the data:
     #  dashboard is already running there, warns, and exits)
 
 Options: `--open` (open the browser), `--port <n>`, and a positional
-`path/to/usage.db` (defaults to the standard DB). It has two pages, a
+`path/to/usage.db` (defaults to the standard DB). It has three pages, a
 **Timeline** filter, and a **Refresh** button at the top that regenerates the
 report straight from `usage.db`:
 
@@ -66,6 +66,10 @@ report straight from `usage.db`:
   `(unknown repo)` / `(no branch)` (no git repo or branch detected), `(root)`
   (work outside any skill — the implicit root phase), and `unknown` (a skill
   activated whose name could not be resolved).
+- **Sessions** — the same phase data pivoted by **session → skill**: one
+  collapsible entry per agent run (newest first), showing the session's git
+  **repo / branch** and **model**, with its `skill` phases underneath and AI
+  credit usage, duration, and **start time** at each level.
 - **Stats** — top tools (calls + durations), superpowers **phase analysis** per
   skill (runs, total/avg time, credits, tokens), and subagent activity — each
   with **Started** / **Last active** timestamps.
