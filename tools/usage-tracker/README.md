@@ -164,31 +164,16 @@ Or, from a local checkout:
 
 #### Windows
 
-**Recommended — PowerShell** (the equivalent of `curl | bash`; `irm` downloads
-the script and `iex` runs it):
+**PowerShell** (the equivalent of `curl | bash`; `irm` downloads the script and
+`iex` runs it):
 
 ```powershell
 irm https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.ps1 | iex
 ```
 
-> **Do not pipe a `.cmd` into `cmd`** (e.g. `curl … | cmd`). A batch script only
-> runs correctly from a **file** — piping it over stdin breaks `for /f`,
-> `setlocal`, and `exit /b`, and causes `curl: (23)` write errors. Use the
-> PowerShell one-liner above, or **download the `.cmd` then run it.**
-
-Download and run the batch installer from **cmd.exe**:
-
-```bat
-curl.exe -fsSL -o "%TEMP%\sp-setup.cmd" https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd && "%TEMP%\sp-setup.cmd"
-```
-
-> Note: `%TEMP%` is **cmd.exe** syntax. In PowerShell use `$env:TEMP` (and the
-> call operator `&` to run the saved path), or just use the `irm | iex`
-> one-liner above.
-
 Or, from a local checkout (defaults `COPILOT_HOME` to `%USERPROFILE%\.copilot`):
 
-    setup.cmd        # or:  powershell -File setup.ps1
+    powershell -File setup.ps1
 
 The same `SUPERPOWERS_USAGE_*` / `COPILOT_HOME` environment overrides apply.
 
