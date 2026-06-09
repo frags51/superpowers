@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync } from
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { isMainModule } from './db.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -103,5 +104,5 @@ function main() {
   console.log('Restart Copilot CLI so the changes take effect.');
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain = isMainModule(import.meta.url);
 if (isMain) main();

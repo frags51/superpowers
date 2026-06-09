@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, existsSync, copyFileSync, rmSync } from 'n
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { applyUninstall, HOOKS_FILE_NAME } from './install.js';
+import { isMainModule } from './db.js';
 
 function loadJsonc(file) {
   try {
@@ -28,5 +29,5 @@ function main() {
   console.log('Superpowers usage tracker removed (statusLine + standalone hooks). Restart Copilot CLI.');
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain = isMainModule(import.meta.url);
 if (isMain) main();

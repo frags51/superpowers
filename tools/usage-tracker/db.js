@@ -1,6 +1,6 @@
 // SQLite helper for the usage tracker.
 // Prefers node:sqlite; falls back to the sqlite3 CLI when unavailable.
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -14,6 +14,17 @@ const requireCjs = createRequire(import.meta.url);
 
 export const nowMs = () => Date.now();
 export const genId = () => randomUUID();
+
+// Robust "is this module the entry point?" check that survives symlinked paths
+// (e.g. macOS /tmp -> /private/tmp), where comparing import.meta.url to
+// process.argv[1] as raw strings gives a false negative.
+export function isMainModule(metaUrl) {
+  try {
+    return realpathSync(process.argv[1] || '') === realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
 
 function loadNodeSqlite() {
   try {

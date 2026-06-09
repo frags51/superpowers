@@ -1,6 +1,6 @@
 // CLI: list running (and optionally stopped) subagents and what they're doing.
 // Usage: node subagents.js [--all] [--session <id>] [--json]
-import { openDb, defaultDbPath, nowMs } from './db.js';
+import { openDb, defaultDbPath, nowMs, isMainModule } from './db.js';
 
 export function fmtElapsed(ms) {
   if (ms == null || ms < 0) ms = 0;
@@ -85,5 +85,5 @@ function main() {
   }
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain = isMainModule(import.meta.url);
 if (isMain) main();

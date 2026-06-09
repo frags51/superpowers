@@ -5,7 +5,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  openDb, defaultDbPath, nowMs, genId, gitBranch, gitRepo,
+  openDb, defaultDbPath, nowMs, genId, gitBranch, gitRepo, isMainModule,
 } from './db.js';
 import { snapshotDelta, sumOutputTokens } from './usage.js';
 
@@ -274,5 +274,5 @@ function main() {
   }
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain = isMainModule(import.meta.url);
 if (isMain) main();

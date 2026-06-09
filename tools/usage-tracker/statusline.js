@@ -2,7 +2,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { openDb, defaultDbPath, nowMs } from './db.js';
+import { openDb, defaultDbPath, nowMs, isMainModule } from './db.js';
 
 export function fmtNum(n) {
   n = Number(n) || 0;
@@ -105,5 +105,5 @@ function main() {
   process.stdout.write(line + '\n');
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain = isMainModule(import.meta.url);
 if (isMain) main();
