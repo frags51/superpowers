@@ -12,10 +12,15 @@ rem
 rem  Usage:
 rem    setup.cmd                       (from a local checkout, or after download)
 rem
-rem  Download + run in one go (PowerShell):
-rem    curl.exe -fsSL -o "%TEMP%\sp-setup.cmd" ^
-rem      https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd ^
-rem      ^&^& "%TEMP%\sp-setup.cmd"
+rem  Download + run in one go:
+rem    PowerShell (use the call operator & to invoke the saved path):
+rem      curl.exe -fsSL -o "$env:TEMP\sp-setup.cmd" ^
+rem        https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd
+rem      ^& "$env:TEMP\sp-setup.cmd"
+rem    cmd.exe:
+rem      curl.exe -fsSL -o "%TEMP%\sp-setup.cmd" ^
+rem        https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd ^
+rem        ^&^& "%TEMP%\sp-setup.cmd"
 rem
 rem  Environment overrides:
 rem    COPILOT_HOME            Copilot config dir   (default: %USERPROFILE%\.copilot)

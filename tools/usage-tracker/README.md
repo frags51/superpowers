@@ -65,15 +65,27 @@ Or, from a local checkout:
 
     bash vendor/superpowers/tools/usage-tracker/setup.sh
 
-#### Windows (cmd.exe)
+#### Windows
 
-Use the batch installer, which defaults `COPILOT_HOME` to `%USERPROFILE%\.copilot`:
+Use the batch installer (cmd.exe), which defaults `COPILOT_HOME` to
+`%USERPROFILE%\.copilot`:
 
     setup.cmd
 
-To download and run it in one go (PowerShell):
+To download and run it from **PowerShell**, use the call operator `&` to invoke
+the saved script (a quoted path on its own is just a string literal in
+PowerShell) and `$env:TEMP` for the temp dir:
 
-    curl.exe -fsSL -o "%TEMP%\sp-setup.cmd" https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd && "%TEMP%\sp-setup.cmd"
+```powershell
+curl.exe -fsSL -o "$env:TEMP\sp-setup.cmd" https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd
+& "$env:TEMP\sp-setup.cmd"
+```
+
+From **cmd.exe** instead:
+
+```bat
+curl.exe -fsSL -o "%TEMP%\sp-setup.cmd" https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd && "%TEMP%\sp-setup.cmd"
+```
 
 The same `SUPERPOWERS_USAGE_*` / `COPILOT_HOME` environment overrides apply.
 
