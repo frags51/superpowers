@@ -8,9 +8,32 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" session-start",
             "async": false
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/track.cmd\" sessionStart",
+            "async": true
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/track.cmd\" userPromptSubmitted", "async": true } ] }
+    ],
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/track.cmd\" preToolUse", "async": true } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/track.cmd\" postToolUse", "async": true } ] }
+    ],
+    "SubagentStart": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/track.cmd\" subagentStart", "async": true } ] }
+    ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/track.cmd\" subagentStop", "async": true } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/track.cmd\" sessionEnd", "async": true } ] }
     ]
   }
 }
