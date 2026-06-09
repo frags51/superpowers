@@ -41,14 +41,19 @@ A zero-dependency local web UI to explore the data:
     # (default http://localhost:7493/, auto-incrementing if the port is busy)
 
 Options: `--open` (open the browser), `--port <n>`, and a positional
-`path/to/usage.db` (defaults to the standard DB). It has two pages and a
-**Refresh** button at the top that regenerates the report straight from
-`usage.db`:
+`path/to/usage.db` (defaults to the standard DB). It has two pages, a
+**Timeline** filter, and a **Refresh** button at the top that regenerates the
+report straight from `usage.db`:
 
+- **Timeline** — restricts every chart to a time window: **Last 1 day**,
+  **Last 1 week**, **Last 1 month**, **All time**, or a **Custom range** of
+  dates. The window is applied server-side via `from`/`to` (millisecond)
+  query params on `/api/report`.
 - **Usage** — a collapsible infographic: **repo → branch → skill**, showing AI
-  credit usage and duration (in seconds) at each level.
+  credit usage, duration (in seconds), and the **start time** at each level.
 - **Stats** — top tools (calls + durations), superpowers **phase analysis** per
-  skill (runs, total/avg time, credits, tokens), and subagent activity.
+  skill (runs, total/avg time, credits, tokens), and subagent activity — each
+  with **Started** / **Last active** timestamps.
 
 When the plugin is installed, you can also just ask Copilot to "open my usage
 dashboard" — the **`viewing-usage-dashboard`** skill starts the server and opens

@@ -46,14 +46,22 @@ function parseArgs(argv) {
   return a;
 }
 
-function report(dbPath) {
+function report(dbPath, opts) {
   const db = openDb(dbPath);
-  try { return buildReport(db); } finally { db.close(); }
+  try { return buildReport(db, opts); } finally { db.close(); }
 }
 
 function send(res, code, type, body) {
   res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(body);
+}
+
+// Pull optional `from`/`to` millisecond bounds from the request query string.
+// Invalid or missing values are ignored (treated as an open bound).
+export function parseRange(url) {
+  const q = new URL(url, 'http://localhost').searchParams;
+  const numOr = (v) => { if (v == null || v === '') return undefined; const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+  return { from: numOr(q.get('from')), to: numOr(q.get('to')) };
 }
 
 export function createDashboard(dbPath) {
@@ -63,7 +71,7 @@ export function createDashboard(dbPath) {
         return send(res, 200, 'text/html; charset=utf-8', readFileSync(join(HERE, 'dashboard.html'), 'utf8'));
       }
       if (req.url.startsWith('/api/report')) {
-        return send(res, 200, 'application/json; charset=utf-8', JSON.stringify({ ...report(dbPath), dbPath }));
+        return send(res, 200, 'application/json; charset=utf-8', JSON.stringify({ ...report(dbPath, parseRange(req.url)), dbPath }));
       }
       send(res, 404, 'text/plain', 'not found');
     } catch (e) {

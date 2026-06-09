@@ -25,6 +25,14 @@
   .tab { padding:6px 14px; border-radius:8px; cursor:pointer; color:var(--muted); }
   .tab.active { background:var(--panel2); color:var(--fg); }
   .meta { color:var(--muted); font-size:12px; }
+  .range { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .range label { color:var(--muted); font-size:12px; }
+  select, input[type="date"] { background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-size:13px;
+    font-family:inherit; }
+  select:hover, input[type="date"]:hover { border-color:var(--accent); }
+  input[type="date"] { color-scheme:dark; }
+  .ts { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
   main { padding:18px; max-width:1100px; margin:0 auto; }
   .chips { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px; }
   .chip { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 14px; }
@@ -63,6 +71,21 @@
     <div class="tab" data-tab="stats">Stats</div>
   </div>
   <div class="spacer"></div>
+  <div class="range">
+    <label for="range-preset">Timeline</label>
+    <select id="range-preset">
+      <option value="all">All time</option>
+      <option value="1d">Last 1 day</option>
+      <option value="1w">Last 1 week</option>
+      <option value="1m">Last 1 month</option>
+      <option value="custom">Custom range</option>
+    </select>
+    <span id="custom-range" class="hidden">
+      <input type="date" id="range-from" aria-label="From date" />
+      <span class="meta">→</span>
+      <input type="date" id="range-to" aria-label="To date" />
+    </span>
+  </div>
   <span class="meta" id="meta"></span>
   <button class="primary" id="refresh">↻ Refresh</button>
 </header>
@@ -79,6 +102,12 @@ const aiu = (v) => (Number(v||0)).toFixed(3);
 const num = (v) => Number(v||0).toLocaleString();
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pct = (v, max) => (max > 0 ? Math.max(2, Math.round((v/max)*100)) : 0);
+const ts = (ms) => {
+  if (ms == null) return '—';
+  return new Date(Number(ms)).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+};
 
 let activeTab = 'usage';
 
@@ -105,20 +134,21 @@ function renderUsage(tree) {
       const skMax = Math.max(...b.skills.map(s => s.durationMs), 1);
       const skills = b.skills.map((s) => `
         <div class="skill-row">
-          <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span></span>
+          <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
+            <span class="ts">· started ${ts(s.firstAt)}</span></span>
           <span class="bar"><i style="width:${pct(s.durationMs, skMax)}%"></i></span>
           ${nums(s.aiu, s.durationMs)}
         </div>`).join('');
       return `<details open>
         <summary>
-          <span class="name grow">🌿 ${esc(b.feature)}</span>
+          <span class="name grow">🌿 ${esc(b.feature)} <span class="ts">· started ${ts(b.firstAt)}</span></span>
           <span class="bar"><i style="width:${pct(b.durationMs, brMax)}%"></i></span>
           ${nums(b.aiu, b.durationMs)}
         </summary>${skills}</details>`;
     }).join('');
     return `<details open>
       <summary>
-        <span class="name grow">📦 ${esc(repo.repo)}</span>
+        <span class="name grow">📦 ${esc(repo.repo)} <span class="ts">· started ${ts(repo.firstAt)}</span></span>
         <span class="bar"><i style="width:${pct(repo.durationMs, repoMax)}%"></i></span>
         ${nums(repo.aiu, repo.durationMs)}
       </summary>${branches}</details>`;
@@ -133,46 +163,82 @@ function renderStats(r) {
   const toolMax = Math.max(...r.tools.map(t => t.totalMs), 1);
   const tools = r.tools.length ? `
     <h2>Top tools</h2>
-    <table><tr><th>Tool</th><th class="num">Calls</th><th class="num">Total</th><th class="num">Avg</th><th class="num">Max</th><th></th></tr>
+    <table><tr><th>Tool</th><th class="num">Calls</th><th class="num">Total</th><th class="num">Avg</th><th class="num">Max</th><th>Started</th><th>Last active</th><th></th></tr>
     ${r.tools.map(t => `<tr>
       <td>${esc(t.name)}</td><td class="num">${num(t.count)}</td>
       <td class="num">${sec(t.totalMs)}</td><td class="num">${sec(t.avgMs)}</td><td class="num">${sec(t.maxMs)}</td>
+      <td class="ts">${ts(t.firstAt)}</td><td class="ts">${ts(t.lastAt)}</td>
       <td>${barCell(t.totalMs, toolMax)}</td></tr>`).join('')}
     </table>` : '';
 
   const skMax = Math.max(...r.skills.map(s => s.totalMs), 1);
   const skills = r.skills.length ? `
     <h2>Superpowers phases (skills)</h2>
-    <table><tr><th>Skill</th><th class="num">Runs</th><th class="num">Total</th><th class="num">Avg</th><th class="num">Credits</th><th class="num">Tokens</th><th></th></tr>
+    <table><tr><th>Skill</th><th class="num">Runs</th><th class="num">Total</th><th class="num">Avg</th><th class="num">Credits</th><th class="num">Tokens</th><th>Started</th><th>Last active</th><th></th></tr>
     ${r.skills.map(s => `<tr>
       <td>${esc(s.skill)}</td><td class="num">${num(s.count)}</td>
       <td class="num">${sec(s.totalMs)}</td><td class="num">${sec(s.avgMs)}</td>
       <td class="num">${aiu(s.aiu)}</td><td class="num">${num(s.tokens)}</td>
+      <td class="ts">${ts(s.firstAt)}</td><td class="ts">${ts(s.lastAt)}</td>
       <td>${barCell(s.totalMs, skMax)}</td></tr>`).join('')}
     </table>` : '';
 
   const subs = r.subagents.length ? `
     <h2>Subagents</h2>
-    <table><tr><th>Agent</th><th class="num">Total</th><th class="num">Running</th><th class="num">Avg (reliable)</th></tr>
+    <table><tr><th>Agent</th><th class="num">Total</th><th class="num">Running</th><th class="num">Avg (reliable)</th><th>Started</th><th>Last active</th></tr>
     ${r.subagents.map(a => `<tr>
       <td>${esc(a.name)}</td><td class="num">${num(a.count)}</td><td class="num">${num(a.running)}</td>
-      <td class="num">${a.avgMs == null ? '—' : sec(a.avgMs)}</td></tr>`).join('')}
+      <td class="num">${a.avgMs == null ? '—' : sec(a.avgMs)}</td>
+      <td class="ts">${ts(a.firstAt)}</td><td class="ts">${ts(a.lastAt)}</td></tr>`).join('')}
     </table>` : '';
 
   const body = tools + skills + subs;
   $('#view-stats').innerHTML = body || '<div class="empty">No stats yet.</div>';
 }
 
+// Compute {from, to} millisecond bounds from the current timeline selection.
+// Returns nulls for an open bound (e.g. "All time" -> {from:null, to:null}).
+function currentRange() {
+  const preset = $('#range-preset').value;
+  const now = Date.now();
+  const DAY = 86400000;
+  if (preset === '1d') return { from: now - DAY, to: null };
+  if (preset === '1w') return { from: now - 7 * DAY, to: null };
+  if (preset === '1m') return { from: now - 30 * DAY, to: null };
+  if (preset === 'custom') {
+    const fromVal = $('#range-from').value;
+    const toVal = $('#range-to').value;
+    // Custom dates are inclusive: end at the final millisecond of the "to" day.
+    const from = fromVal ? new Date(fromVal + 'T00:00:00').getTime() : null;
+    const to = toVal ? new Date(toVal + 'T23:59:59.999').getTime() : null;
+    return { from, to };
+  }
+  return { from: null, to: null };
+}
+
+function rangeLabel(range) {
+  const f = range.from != null ? new Date(range.from).toLocaleDateString() : null;
+  const t = range.to != null ? new Date(range.to).toLocaleDateString() : null;
+  if (!f && !t) return 'all time';
+  if (f && !t) return `since ${f}`;
+  if (!f && t) return `through ${t}`;
+  return `${f} – ${t}`;
+}
+
 async function load() {
   $('#refresh').disabled = true;
   $('#meta').textContent = 'loading…';
+  const range = currentRange();
+  const qs = new URLSearchParams({ t: String(Date.now()) });
+  if (range.from != null) qs.set('from', String(Math.floor(range.from)));
+  if (range.to != null) qs.set('to', String(Math.floor(range.to)));
   try {
-    const r = await (await fetch('/api/report?t=' + Date.now())).json();
+    const r = await (await fetch('/api/report?' + qs.toString())).json();
     chips(r.totals);
     renderUsage(r.tree);
     renderStats(r);
     const when = new Date(r.generatedAt).toLocaleTimeString();
-    $('#meta').textContent = `${r.dbPath || ''} · updated ${when}`;
+    $('#meta').textContent = `${r.dbPath || ''} · ${rangeLabel(range)} · updated ${when}`;
   } catch (e) {
     $('#meta').textContent = 'error: ' + e.message;
   } finally {
@@ -189,6 +255,18 @@ function setTab(name) {
 
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => setTab(t.dataset.tab)));
 $('#refresh').addEventListener('click', load);
+
+const presetEl = $('#range-preset');
+const customEl = $('#custom-range');
+presetEl.addEventListener('change', () => {
+  const isCustom = presetEl.value === 'custom';
+  customEl.classList.toggle('hidden', !isCustom);
+  // Custom waits for the user to pick dates; presets reload immediately.
+  if (!isCustom) load();
+});
+$('#range-from').addEventListener('change', load);
+$('#range-to').addEventListener('change', load);
+
 load();
 </script>
 </body>
