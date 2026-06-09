@@ -1,8 +1,9 @@
-// Uninstaller: remove the statusLine setting (restores from backup if present).
-import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
+// Uninstaller: remove the statusLine setting (restoring from backup if present)
+// and the standalone hooks file.
+import { readFileSync, writeFileSync, existsSync, copyFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { applyUninstall } from './install.js';
+import { applyUninstall, HOOKS_FILE_NAME } from './install.js';
 
 function loadJsonc(file) {
   try {
@@ -22,7 +23,9 @@ function main() {
     applyUninstall(settings);
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   }
-  console.log('Superpowers usage tracker statusLine removed. Restart Copilot CLI.');
+  const hooksPath = join(COPILOT_HOME, 'hooks', HOOKS_FILE_NAME);
+  try { rmSync(hooksPath, { force: true }); } catch { /* not present */ }
+  console.log('Superpowers usage tracker removed (statusLine + standalone hooks). Restart Copilot CLI.');
 }
 
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
