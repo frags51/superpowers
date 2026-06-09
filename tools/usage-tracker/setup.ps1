@@ -11,7 +11,7 @@
 #   4. Cleans up artifacts from the older standalone installer so tracking does
 #      not run twice.
 #
-# Assumes the `copilot` and `node` commands are on PATH.
+# Assumes the Copilot CLI (`copilot`, or `agency copilot`) and `node` are on PATH.
 #
 # One-liner (recommended on Windows) — installs OR updates:
 #   irm https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/setup.ps1 | iex
@@ -29,8 +29,10 @@ function Install-Superpowers {
   $pluginRef         = "$pluginName@$marketplaceName"
 
   function Test-HasCommand($name) { [bool](Get-Command $name -ErrorAction SilentlyContinue) }
-  if (-not (Test-HasCommand 'copilot')) { Write-Host 'error: missing required command: copilot' -ForegroundColor Red; return }
-  if (-not (Test-HasCommand 'node'))    { Write-Host 'error: missing required command: node' -ForegroundColor Red; return }
+  $cli = Resolve-CopilotCli
+  if (-not $cli) { Write-Host 'error: could not find the Copilot CLI (`copilot` or `agency copilot`) on PATH' -ForegroundColor Red; return }
+  Write-Host "==> Using CLI: $($cli.Display)"
+  if (-not (Test-HasCommand 'node')) { Write-Host 'error: missing required command: node' -ForegroundColor Red; return }
 
   $copilotHome =
     if ($env:COPILOT_HOME)   { $env:COPILOT_HOME }
@@ -39,19 +41,19 @@ function Install-Superpowers {
 
   # 1) Register the marketplace (tolerate "already registered").
   Write-Host "==> Registering marketplace $marketplaceSource"
-  $mp = (& copilot plugin marketplace add $marketplaceSource 2>&1 | Out-String)
+  $mp = (& $cli.Exe @($cli.Pre + @('plugin','marketplace','add',$marketplaceSource)) 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0 -and $mp -notmatch 'already registered') {
     Write-Host "error: failed to add marketplace:`n$mp" -ForegroundColor Red; return
   }
 
   # 2) Install if missing, otherwise update.
-  $installed = (& copilot plugin list 2>&1 | Out-String)
+  $installed = (& $cli.Exe @($cli.Pre + @('plugin','list')) 2>&1 | Out-String)
   if ($installed -match [regex]::Escape($pluginRef)) {
     Write-Host "==> Updating plugin $pluginRef"
-    & copilot plugin update $pluginRef
+    & $cli.Exe @($cli.Pre + @('plugin','update',$pluginRef))
   } else {
     Write-Host "==> Installing plugin $pluginRef"
-    & copilot plugin install $pluginRef
+    & $cli.Exe @($cli.Pre + @('plugin','install',$pluginRef))
   }
   if ($LASTEXITCODE -ne 0) { Write-Host 'error: plugin install/update failed' -ForegroundColor Red; return }
 
@@ -113,6 +115,19 @@ function Remove-LegacyArtifacts($copilotHome) {
     Write-Host "==> Removing old standalone clone at $oldClone"
     Remove-Item -Recurse -Force $oldClone -ErrorAction SilentlyContinue
   }
+}
+
+# Resolve the Copilot CLI invocation. Prefers the `agency copilot` wrapper when
+# the `agency` command is present; otherwise falls back to a plain `copilot`.
+# Returns an object with: Exe (the executable), Pre (leading args), Display.
+function Resolve-CopilotCli {
+  if (Get-Command agency -ErrorAction SilentlyContinue) {
+    return [pscustomobject]@{ Exe = 'agency'; Pre = @('copilot'); Display = 'agency copilot' }
+  }
+  if (Get-Command copilot -ErrorAction SilentlyContinue) {
+    return [pscustomobject]@{ Exe = 'copilot'; Pre = @(); Display = 'copilot' }
+  }
+  return $null
 }
 
 Install-Superpowers

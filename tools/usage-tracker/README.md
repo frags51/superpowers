@@ -173,8 +173,8 @@ irm https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-track
 ```
 
 Re-run the **same** command any time to update — it detects an existing install
-and runs `copilot plugin update` instead of `install`. It assumes `copilot` and
-`node` are on PATH. Restart Copilot CLI afterward. What it does:
+and runs `copilot plugin update` instead of `install`. It assumes the Copilot
+CLI (`copilot`, or `agency copilot` if present) and `node` are on PATH. Restart Copilot CLI afterward. What it does:
 
 1. `copilot plugin marketplace add frags51/superpowers` (idempotent).
 2. `copilot plugin install superpowers@superpowers-dev` — or `update` if the
