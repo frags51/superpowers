@@ -90,10 +90,20 @@ $(printf '\033[1;32m✓ Superpowers usage tracker installed.\033[0m')
 Next steps:
   1. Restart Copilot CLI so the hooks load (tracking is headless — no status line).
   2. Open the dashboard (credit/time infographic + stats):
-       node "$TOOL_DIR/dashboard.js"      # then visit the printed URL
+       node "$TOOL_DIR/dashboard.js" --open    # or visit the printed URL
   3. List active subagents any time with:
        node "$TOOL_DIR/subagents.js" --all
   4. Uninstall with:
        COPILOT_HOME="$COPILOT_HOME" node "$TOOL_DIR/uninstall.js"
+
+This installs usage TRACKING only (hooks + headless credit snapshots). It does
+NOT install the superpowers plugin, so the natural-language skills (e.g. asking
+Copilot to "open my usage dashboard") are not enabled by this script. To install
+the full plugin (skills + agents), in a Copilot CLI session run:
+       /plugin marketplace add frags51/superpowers
+       /plugin install superpowers@superpowers-dev
+   Update it later with:   /plugin update superpowers
+   Or load it for one session without installing:
+       copilot --plugin-dir "$TOOL_DIR/../.."
 
 EOF

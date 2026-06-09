@@ -68,6 +68,18 @@ No hook carries token/credit data, so:
 
 ## Install
 
+> **What the installer does vs. the plugin.** The installer / `setup.*` scripts
+> wire **usage tracking only** — the lifecycle hooks and the headless AI-credit
+> snapshot collector. They do **not** register the `superpowers` plugin
+> (marketplace `superpowers-dev`) in Copilot CLI, so the natural-language
+> **skills** (e.g. the `viewing-usage-dashboard` skill that opens the dashboard
+> by asking) are not enabled by these scripts. Tracking and the dashboard
+> (`node dashboard.js --open`) work standalone. To also get the skills/agents,
+> install the plugin in a Copilot CLI session:
+>
+>     /plugin marketplace add frags51/superpowers
+>     /plugin install superpowers@superpowers-dev
+
 Tracking **hooks** load automatically when the superpowers plugin is installed
 via `/plugin`. Run the installer once to write the standalone hooks file and the
 headless snapshot collector (which records AI-credit usage with no visible
@@ -78,6 +90,37 @@ status line — a plugin manifest cannot set it):
     node vendor/superpowers/tools/usage-tracker/install.js --no-snapshot
     # revert with:
     node vendor/superpowers/tools/usage-tracker/uninstall.js
+
+## Installing & updating the plugin (skills + agents)
+
+The `setup.*` scripts do **not** register the plugin in Copilot CLI (there is no
+non-interactive plugin-install command, and the scripts deliberately don't
+hand-edit Copilot's `config.json`). Use the supported `/plugin` flow:
+
+**Install (persistent).** In a Copilot CLI session:
+
+    /plugin marketplace add frags51/superpowers      # or a local path to a checkout
+    /plugin install superpowers@superpowers-dev
+
+`/plugin marketplace add` accepts either a GitHub `owner/repo` or a **local
+directory** that contains `.claude-plugin/marketplace.json` (e.g. the clone the
+setup script makes at `$COPILOT_HOME/plugin-data/superpowers-usage/src`).
+
+**Update an already-installed plugin.** In a Copilot CLI session:
+
+    /plugin update superpowers
+
+- If you added the marketplace from **GitHub**, this re-fetches the latest from
+  `frags51/superpowers`.
+- If you added it from a **local path**, update that checkout first (e.g. re-run
+  the setup script, which does `git fetch` + checkout, or `git -C <path> pull`),
+  then run `/plugin update superpowers` to re-copy it into the plugin cache.
+
+**Load without installing (per session).** No marketplace needed:
+
+    copilot --plugin-dir /path/to/superpowers-checkout
+
+This loads the plugin's skills and agents for that one session only.
 
 Restart Copilot CLI after installing so the hooks load.
 

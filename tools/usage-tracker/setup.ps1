@@ -87,6 +87,15 @@ function Install-SuperpowersUsage {
   Write-Host '    1. Restart Copilot CLI so the hooks load (tracking is headless).'
   Write-Host "    2. Open the dashboard:  node ""$dash"" --open"
   Write-Host "    3. Uninstall:           node ""$unin"""
+  Write-Host ''
+  Write-Host '  This installs usage TRACKING only (hooks + headless credit snapshots).'
+  Write-Host '  It does NOT install the superpowers plugin, so the natural-language'
+  Write-Host '  skills (e.g. "open my usage dashboard") are not enabled by this script.'
+  Write-Host '  To install the full plugin, in a Copilot CLI session run:'
+  Write-Host '       /plugin marketplace add frags51/superpowers'
+  Write-Host '       /plugin install superpowers@superpowers-dev'
+  Write-Host '  Update it later with:   /plugin update superpowers'
+  Write-Host "  Or load it for one session without installing:  copilot --plugin-dir ""$src"""
 }
 
 Install-SuperpowersUsage
