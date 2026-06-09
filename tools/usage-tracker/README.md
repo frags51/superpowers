@@ -39,16 +39,51 @@ No hook carries token/credit data, so:
 
 ## Install
 
-Tracking **hooks** load automatically when the plugin is installed via
-`/plugin`. The **statusline** must be wired once (a plugin manifest cannot set
-it):
+Tracking **hooks** load automatically when the superpowers plugin is installed
+via `/plugin`. Wire the **statusline** once (a plugin manifest cannot set it):
 
-```bash
-node vendor/superpowers/tools/usage-tracker/install.js   # sets settings.json statusLine
-node vendor/superpowers/tools/usage-tracker/uninstall.js # reverts it
-```
+    node vendor/superpowers/tools/usage-tracker/install.js
+    # revert with:
+    node vendor/superpowers/tools/usage-tracker/uninstall.js
 
 Restart Copilot CLI after installing so hooks and the statusline load.
+
+### Install on another machine (no plugin required)
+
+To set this up on a different machine — downloading the tool and wiring both the
+hooks and the statusline without installing the full plugin — run the remote
+installer. It clones the fork, self-tests, and installs into Copilot:
+
+    curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.sh | bash
+
+Or, from a local checkout:
+
+    bash vendor/superpowers/tools/usage-tracker/setup.sh
+
+This writes a **self-contained hooks file** at
+`$COPILOT_HOME/hooks/superpowers-usage.json` (absolute paths, all lifecycle
+events) plus the statusline, then prints next steps. Restart Copilot CLI
+afterward. Overrides via environment:
+
+| Env var | Purpose | Default |
+| --- | --- | --- |
+| `COPILOT_HOME` | Copilot config dir | `~/.copilot` |
+| `SUPERPOWERS_USAGE_REPO` | git URL to clone | `https://github.com/frags51/superpowers.git` |
+| `SUPERPOWERS_USAGE_REF` | branch/tag/commit | `ghcp-native` |
+| `SUPERPOWERS_USAGE_SRC` | where to clone | `$COPILOT_HOME/plugin-data/superpowers-usage/src` |
+| `SUPERPOWERS_USAGE_NO_STATUSLINE=1` | install hooks only | off |
+
+Uninstall a standalone install with:
+
+    node "$COPILOT_HOME/plugin-data/superpowers-usage/src/tools/usage-tracker/uninstall.js"
+
+> If you later install the superpowers plugin via `/plugin` on the same machine,
+> remove the standalone hooks file first (`uninstall.js`) so events aren't
+> recorded twice.
+
+For a plugin-only machine that just needs the standalone hooks wired (e.g. you
+manage the source yourself), `node install.js --hooks` writes the hooks file in
+addition to the statusline; `--hooks-only` skips the statusline.
 
 ## Subagents CLI
 
