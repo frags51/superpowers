@@ -32,8 +32,9 @@ plugin.
    node "<path>/tools/usage-tracker/dashboard.js" --open
    ```
 
-   It prints the URL (default `http://localhost:7493/`, auto-incrementing if the
-   port is busy) and opens it. `--open` works cross-platform (macOS `open`,
+   It prints the URL (default `http://localhost:7493/`). If that port is busy
+   it assumes a dashboard is already running there, prints a warning, and exits.
+   `--open` works cross-platform (macOS `open`,
    Windows `start`, Linux `xdg-open`).
 
 3. **Tell the user the URL** in case the browser did not auto-open, and remind

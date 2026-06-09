@@ -46,7 +46,8 @@ A zero-dependency local web UI to explore the data:
 
     node vendor/superpowers/tools/usage-tracker/dashboard.js --open
     # --open launches the default browser; otherwise open the printed URL
-    # (default http://localhost:7493/, auto-incrementing if the port is busy)
+    # (default http://localhost:7493/; if the port is busy it assumes a
+    #  dashboard is already running there, warns, and exits)
 
 Options: `--open` (open the browser), `--port <n>`, and a positional
 `path/to/usage.db` (defaults to the standard DB). It has two pages, a

@@ -85,11 +85,11 @@ function main() {
   const dbPath = args.db || defaultDbPath(process.env);
   const server = createDashboard(dbPath);
 
-  let attemptsLeft = 10;
   server.on('error', (e) => {
-    if (e && e.code === 'EADDRINUSE' && attemptsLeft-- > 0) {
-      args.port += 1;
-      server.listen(args.port);
+    if (e && e.code === 'EADDRINUSE') {
+      const url = `http://localhost:${args.port}/`;
+      console.warn(`dashboard: port ${args.port} is already in use; assuming a dashboard is already running at ${url}`);
+      process.exit(0);
     } else {
       console.error(`dashboard: ${e && e.message || e}`);
       process.exit(1);
