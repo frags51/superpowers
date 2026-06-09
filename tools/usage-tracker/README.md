@@ -36,17 +36,23 @@ See the full schema and rationale in
 
 A zero-dependency local web UI to explore the data:
 
-    node vendor/superpowers/tools/usage-tracker/dashboard.js
-    # then open the printed URL (default http://localhost:7493/)
+    node vendor/superpowers/tools/usage-tracker/dashboard.js --open
+    # --open launches the default browser; otherwise open the printed URL
+    # (default http://localhost:7493/, auto-incrementing if the port is busy)
 
-Options: `--port <n>` and a positional `path/to/usage.db` (defaults to the
-standard DB). It has two pages and a **Refresh** button at the top that
-regenerates the report straight from `usage.db`:
+Options: `--open` (open the browser), `--port <n>`, and a positional
+`path/to/usage.db` (defaults to the standard DB). It has two pages and a
+**Refresh** button at the top that regenerates the report straight from
+`usage.db`:
 
 - **Usage** — a collapsible infographic: **repo → branch → skill**, showing AI
   credit usage and duration (in seconds) at each level.
 - **Stats** — top tools (calls + durations), superpowers **phase analysis** per
   skill (runs, total/avg time, credits, tokens), and subagent activity.
+
+When the plugin is installed, you can also just ask Copilot to "open my usage
+dashboard" — the **`viewing-usage-dashboard`** skill starts the server and opens
+the page for you.
 
 ## How usage is attributed
 
