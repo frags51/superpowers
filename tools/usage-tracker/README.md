@@ -65,6 +65,18 @@ Or, from a local checkout:
 
     bash vendor/superpowers/tools/usage-tracker/setup.sh
 
+#### Windows (cmd.exe)
+
+Use the batch installer, which defaults `COPILOT_HOME` to `%USERPROFILE%\.copilot`:
+
+    setup.cmd
+
+To download and run it in one go (PowerShell):
+
+    curl.exe -fsSL -o "%TEMP%\sp-setup.cmd" https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd && "%TEMP%\sp-setup.cmd"
+
+The same `SUPERPOWERS_USAGE_*` / `COPILOT_HOME` environment overrides apply.
+
 This writes a **self-contained hooks file** at
 `$COPILOT_HOME/hooks/superpowers-usage.json` (absolute paths, all lifecycle
 events) plus the statusline, then prints next steps. Restart Copilot CLI
