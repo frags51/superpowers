@@ -21,6 +21,8 @@ NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
 
 If you haven't run the verification command in this message, you cannot claim it passes.
 
+Gather evidence by actually running the check with the `bash` tool (use `mode: "async"` for long builds/test suites and read results with `read_bash`); never claim something passes without real command output in front of you.
+
 ## The Gate Function
 
 ```

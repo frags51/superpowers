@@ -66,12 +66,14 @@ Each agent gets:
 ### 3. Dispatch in Parallel
 
 ```typescript
-// In Claude Code / AI environment
+// In Copilot CLI
 Task("Fix agent-tool-abort.test.ts failures")
 Task("Fix batch-completion-behavior.test.ts failures")
 Task("Fix tool-approval-race-conditions.test.ts failures")
 // All three run concurrently
 ```
+
+In the Copilot CLI, launch independent agents with multiple `task` calls (use `mode: "background"` for genuine parallelism), read results with `read_agent` / `list_agents`, and consider `/fleet` for parallel subagent execution.
 
 ### 4. Review and Integrate
 
