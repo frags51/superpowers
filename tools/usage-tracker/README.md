@@ -112,16 +112,24 @@ status line — a plugin manifest cannot set it):
     node vendor/superpowers/tools/usage-tracker/install.js
     # hooks only, no credit snapshots:
     node vendor/superpowers/tools/usage-tracker/install.js --no-snapshot
+    # statusLine only (when the plugin already provides the hooks):
+    node vendor/superpowers/tools/usage-tracker/install.js --snapshot-only
     # revert with:
     node vendor/superpowers/tools/usage-tracker/uninstall.js
 
 ## Installing & updating the plugin (skills + agents)
 
-The `setup.*` scripts do **not** register the plugin in Copilot CLI (there is no
-non-interactive plugin-install command, and the scripts deliberately don't
-hand-edit Copilot's `config.json`). Use the supported `/plugin` flow:
+On **Windows**, the one-liner below (`setup.ps1`) does all of this for you. To do
+it by hand on any platform, use either the non-interactive `copilot plugin` CLI
+or the `/plugin` slash commands in a session. (The macOS/Linux `setup.sh` script
+installs standalone tracking only and does not register the plugin.)
 
-**Install (persistent).** In a Copilot CLI session:
+**Install (persistent).** Non-interactive, from any shell:
+
+    copilot plugin marketplace add frags51/superpowers
+    copilot plugin install superpowers@superpowers-dev
+
+or interactively, in a Copilot CLI session:
 
     /plugin marketplace add frags51/superpowers      # or a local path to a checkout
     /plugin install superpowers@superpowers-dev
@@ -130,7 +138,11 @@ hand-edit Copilot's `config.json`). Use the supported `/plugin` flow:
 directory** that contains `.claude-plugin/marketplace.json` (e.g. the clone the
 setup script makes at `$COPILOT_HOME/plugin-data/superpowers-usage/src`).
 
-**Update an already-installed plugin.** In a Copilot CLI session:
+**Update an already-installed plugin.** Non-interactive:
+
+    copilot plugin update superpowers@superpowers-dev
+
+or, in a Copilot CLI session:
 
     /plugin update superpowers
 
@@ -148,11 +160,49 @@ This loads the plugin's skills and agents for that one session only.
 
 Restart Copilot CLI after installing so the hooks load.
 
+### Windows: one command to install or update (recommended)
 
-### Install on another machine (no plugin required)
+On Windows, a single PowerShell command installs **or updates** the whole setup —
+the plugin (skills, agents, tracking hooks, dashboard) via the Copilot CLI, plus
+the headless AI-credit `statusLine` collector that a plugin manifest cannot
+register. `irm` downloads the script text and `iex` runs it (the PowerShell
+equivalent of `curl | bash`):
+
+```powershell
+irm https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/setup.ps1 | iex
+```
+
+Re-run the **same** command any time to update — it detects an existing install
+and runs `copilot plugin update` instead of `install`. It assumes `copilot` and
+`node` are on PATH. Restart Copilot CLI afterward. What it does:
+
+1. `copilot plugin marketplace add frags51/superpowers` (idempotent).
+2. `copilot plugin install superpowers@superpowers-dev` — or `update` if the
+   plugin is already installed.
+3. Wires the snapshot `statusLine` to the freshly installed plugin's own
+   `snapshot.js`, so `copilot plugin update` keeps it current.
+4. Removes leftovers from the older standalone installer (its
+   `superpowers-usage.json` hooks file and clone dir) so events aren't tracked
+   twice.
+
+**Uninstall** (removes the statusLine, the plugin, and the marketplace; your
+recorded `usage.db` history is left in place):
+
+```powershell
+irm https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/uninstall.ps1 | iex
+```
+
+From a local checkout you can run the scripts directly (they honor `COPILOT_HOME`,
+default `%USERPROFILE%\.copilot`):
+
+    powershell -File setup.ps1
+    powershell -File uninstall.ps1
+
+
+### Install on another machine, tracking only (macOS / Linux)
 
 To set this up on a different machine — downloading the tool and wiring both the
-hooks and the headless credit snapshotter without installing the full plugin —
+hooks and the headless credit snapshotter **without** installing the full plugin —
 run the remote installer. It clones the fork, self-tests, and installs into
 Copilot:
 
@@ -162,18 +212,9 @@ Or, from a local checkout:
 
     bash vendor/superpowers/tools/usage-tracker/setup.sh
 
-#### Windows
-
-**PowerShell** (the equivalent of `curl | bash`; `irm` downloads the script and
-`iex` runs it):
-
-```powershell
-irm https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.ps1 | iex
-```
-
-Or, from a local checkout (defaults `COPILOT_HOME` to `%USERPROFILE%\.copilot`):
-
-    powershell -File setup.ps1
+> **Windows:** there is no standalone (no-plugin) installer — use the
+> `setup.ps1` one-liner in the section above, which installs the plugin via the
+> Copilot CLI and wires the snapshot statusLine.
 
 The same `SUPERPOWERS_USAGE_*` / `COPILOT_HOME` environment overrides apply.
 

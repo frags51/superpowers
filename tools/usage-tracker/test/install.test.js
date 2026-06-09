@@ -1,6 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyInstall, applyUninstall, buildHooksConfig, HOOKS_FILE_NAME } from '../install.js';
+import { applyInstall, applyUninstall, buildHooksConfig, HOOKS_FILE_NAME, parseMode } from '../install.js';
+
+test('parseMode defaults to installing both hooks file and snapshot', () => {
+  assert.deepEqual(parseMode([]), { wantHooks: true, wantSnapshot: true });
+});
+
+test('parseMode --snapshot-only installs the statusLine only (no hooks file)', () => {
+  assert.deepEqual(parseMode(['--snapshot-only']), { wantHooks: false, wantSnapshot: true });
+  assert.deepEqual(parseMode(['--statusline-only']), { wantHooks: false, wantSnapshot: true });
+});
+
+test('parseMode --no-snapshot / --hooks-only installs the hooks file only', () => {
+  assert.deepEqual(parseMode(['--no-snapshot']), { wantHooks: true, wantSnapshot: false });
+  assert.deepEqual(parseMode(['--hooks-only']), { wantHooks: true, wantSnapshot: false });
+});
+
+test('parseMode --hooks is a no-op (both still install)', () => {
+  assert.deepEqual(parseMode(['--hooks']), { wantHooks: true, wantSnapshot: true });
+});
 
 test('applyInstall sets statusLine; applyUninstall restores', () => {
   const before = { theme: 'dark' };

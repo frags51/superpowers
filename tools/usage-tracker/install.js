@@ -14,6 +14,10 @@
 // statusLine (and provides a standalone hooks file for non-plugin installs).
 //
 // Flags:
+//   --snapshot-only install only the statusLine snapshot collector (skip the
+//                   standalone hooks file — used when the plugin is installed
+//                   via `copilot plugin`, since the plugin already provides hooks)
+//   --statusline-only  alias for --snapshot-only
 //   --no-snapshot   install only the hooks file (skip the snapshot statusLine)
 //   --hooks-only    alias for --no-snapshot
 //   --hooks         accepted for backward compatibility (no-op; hooks always install)
@@ -89,14 +93,30 @@ function installHooksFile(copilotHome) {
   return hooksPath;
 }
 
+// Resolve install mode from CLI args. Returns which artifacts to write:
+//   wantHooks    -> the standalone $COPILOT_HOME/hooks/superpowers-usage.json
+//   wantSnapshot -> the statusLine snapshot collector in settings.json
+export function parseMode(argv) {
+  const args = new Set(argv);
+  const snapshotOnly = args.has('--snapshot-only') || args.has('--statusline-only');
+  const hooksOnly = args.has('--no-snapshot') || args.has('--hooks-only');
+  return {
+    wantHooks: !snapshotOnly,
+    wantSnapshot: !hooksOnly,
+  };
+}
+
 function main() {
-  const args = new Set(process.argv.slice(2));
-  const wantSnapshot = !args.has('--no-snapshot') && !args.has('--hooks-only');
+  const { wantHooks, wantSnapshot } = parseMode(process.argv.slice(2));
   const COPILOT_HOME = process.env.COPILOT_HOME || join(homedir(), '.copilot');
 
   console.log('Superpowers usage tracker installer');
-  const hooksPath = installHooksFile(COPILOT_HOME);
-  console.log(`  hooks            -> ${hooksPath}`);
+  if (wantHooks) {
+    const hooksPath = installHooksFile(COPILOT_HOME);
+    console.log(`  hooks            -> ${hooksPath}`);
+  } else {
+    console.log('  hooks            -> (skipped; the installed plugin provides tracking hooks)');
+  }
   if (wantSnapshot) {
     const p = installSnapshot(COPILOT_HOME);
     console.log(`  snapshot (hidden)-> ${p}`);
