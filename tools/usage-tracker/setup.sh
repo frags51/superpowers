@@ -36,8 +36,9 @@ need() { command -v "$1" >/dev/null 2>&1 || { err "missing required command: $1"
 need git
 need node
 
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-if [ "${NODE_MAJOR:-0}" -lt 22 ]; then
+NODE_MAJOR="$(node -p 'parseInt(process.versions.node,10)' 2>/dev/null || echo 0)"
+case "$NODE_MAJOR" in (*[!0-9]*|'') NODE_MAJOR=0 ;; esac
+if [ "$NODE_MAJOR" -lt 22 ]; then
   if ! command -v sqlite3 >/dev/null 2>&1; then
     err "Node ${NODE_MAJOR} lacks node:sqlite and no sqlite3 CLI fallback was found."
     err "Install Node 22+ or the sqlite3 CLI, then re-run."

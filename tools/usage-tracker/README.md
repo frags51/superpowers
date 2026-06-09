@@ -97,25 +97,28 @@ Or, from a local checkout:
 
 #### Windows
 
-Use the batch installer (cmd.exe), which defaults `COPILOT_HOME` to
-`%USERPROFILE%\.copilot`:
+> **Do not pipe the script into `cmd`** (e.g. `curl … | cmd`). A batch script
+> only runs correctly from a **file** — piping it to `cmd` over stdin breaks
+> `for /f`, `setlocal`, and `exit /b` (you may see a wrong Node version or other
+> oddities). **Download it, then run it.**
 
-    setup.cmd
+Download and run from **cmd.exe**:
 
-To download and run it from **PowerShell**, use the call operator `&` to invoke
-the saved script (a quoted path on its own is just a string literal in
-PowerShell) and `$env:TEMP` for the temp dir:
+```bat
+curl.exe -fsSL -o "%TEMP%\sp-setup.cmd" https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd && "%TEMP%\sp-setup.cmd"
+```
+
+From **PowerShell**, use the call operator `&` to invoke the saved script (a
+quoted path on its own is just a string literal in PowerShell) and `$env:TEMP`:
 
 ```powershell
 curl.exe -fsSL -o "$env:TEMP\sp-setup.cmd" https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd
 & "$env:TEMP\sp-setup.cmd"
 ```
 
-From **cmd.exe** instead:
+Or, from a local checkout (defaults `COPILOT_HOME` to `%USERPROFILE%\.copilot`):
 
-```bat
-curl.exe -fsSL -o "%TEMP%\sp-setup.cmd" https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.cmd && "%TEMP%\sp-setup.cmd"
-```
+    setup.cmd
 
 The same `SUPERPOWERS_USAGE_*` / `COPILOT_HOME` environment overrides apply.
 

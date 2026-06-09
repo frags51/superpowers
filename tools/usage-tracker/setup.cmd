@@ -12,6 +12,10 @@ rem
 rem  Usage:
 rem    setup.cmd                       (from a local checkout, or after download)
 rem
+rem  NOTE: Do NOT pipe this script into cmd (e.g. `curl ... | cmd`). A batch
+rem  script must be run from a FILE; piping over stdin breaks for /f, setlocal,
+rem  and exit /b. Download it first, then run it:
+rem
 rem  Download + run in one go:
 rem    PowerShell (use the call operator & to invoke the saved path):
 rem      curl.exe -fsSL -o "$env:TEMP\sp-setup.cmd" ^
@@ -43,16 +47,22 @@ if errorlevel 1 ( echo error: missing required command: git & exit /b 1 )
 where node >nul 2>nul
 if errorlevel 1 ( echo error: missing required command: node & exit /b 1 )
 
-for /f "delims=" %%v in ('node -p "process.versions.node.split('.')[0]" 2^>nul') do set "NODE_MAJOR=%%v"
-if not defined NODE_MAJOR set "NODE_MAJOR=0"
-if %NODE_MAJOR% LSS 22 (
-  where sqlite3 >nul 2>nul
-  if errorlevel 1 (
-    echo error: Node %NODE_MAJOR% lacks node:sqlite and no sqlite3 CLI fallback was found.
-    echo        Install Node 22+ or the sqlite3 CLI, then re-run.
-    exit /b 1
+rem Detect the Node major version. Use parseInt (no quotes) so the value is not
+rem mangled inside for /f's single-quoted command wrapper.
+set "NODE_MAJOR="
+for /f "delims=" %%v in ('node -p "parseInt(process.versions.node,10)" 2^>nul') do set "NODE_MAJOR=%%v"
+if not defined NODE_MAJOR (
+  echo ==^> Could not detect Node version; continuing ^(needs Node 22+ or a sqlite3 CLI^).
+) else (
+  if %NODE_MAJOR% LSS 22 (
+    where sqlite3 >nul 2>nul
+    if errorlevel 1 (
+      echo error: Node %NODE_MAJOR% lacks node:sqlite and no sqlite3 CLI fallback was found.
+      echo        Install Node 22+ or the sqlite3 CLI, then re-run.
+      exit /b 1
+    )
+    echo ==^> Node %NODE_MAJOR%: will use the sqlite3 CLI fallback.
   )
-  echo ==^> Node %NODE_MAJOR%: will use the sqlite3 CLI fallback.
 )
 
 rem --- Fetch the source -------------------------------------------------------
