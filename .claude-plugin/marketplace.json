@@ -9,7 +9,7 @@
     {
       "name": "superpowers",
       "description": "GHCP-native core skills library for the GitHub Copilot CLI: TDD, debugging, collaboration patterns, and plugin agents.",
-      "version": "5.1.0",
+      "version": "5.2.0",
       "source": "./",
       "author": {
         "name": "Jesse Vincent",
