@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { snapshotDelta, sumOutputTokens } from '../usage.js';
+import { snapshotDelta, sumOutputTokens, canonicalJson, toolMatchKey } from '../usage.js';
 
 test('snapshotDelta computes deltas across a window', () => {
   const rows = [
@@ -50,4 +50,27 @@ test('sumOutputTokens tolerates a missing transcript', () => {
   const t = sumOutputTokens('/no/such/file.jsonl', 0, 10);
   assert.equal(t.output_tokens, null);
   assert.equal(t.total_tokens, null);
+});
+
+test('canonicalJson is key-order stable', () => {
+  assert.equal(
+    canonicalJson({ b: 1, a: { d: 2, c: 3 } }),
+    canonicalJson({ a: { c: 3, d: 2 }, b: 1 }),
+  );
+});
+
+test('toolMatchKey: same name+args match, different differ', () => {
+  const a = toolMatchKey('grep', { pattern: 'x', path: '/a' });
+  const b = toolMatchKey('grep', { path: '/a', pattern: 'x' });
+  const c = toolMatchKey('grep', { pattern: 'y', path: '/a' });
+  const d = toolMatchKey('view', { pattern: 'x', path: '/a' });
+  assert.equal(a, b);          // key order irrelevant
+  assert.notEqual(a, c);       // different args
+  assert.notEqual(a, d);       // different tool
+  assert.match(a, /^[0-9a-f]{8}$/);
+});
+
+test('toolMatchKey tolerates missing/empty args', () => {
+  assert.equal(typeof toolMatchKey('x'), 'string');
+  assert.equal(toolMatchKey('x', {}), toolMatchKey('x', {}));
 });

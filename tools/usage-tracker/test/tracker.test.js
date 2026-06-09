@@ -141,3 +141,66 @@ test('phase usage finalized from snapshots + transcript on close', () => {
     rmSync(tx, { force: true });
   }
 });
+
+test('overlapping tools paired by args hash when no toolCallId', () => {
+  const { db, path } = freshDb();
+  try {
+    const sid = 's-6';
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: '/x', prompt: 'p' }, db, opts());
+    // two different tools open, neither carries a toolCallId (real CLI shape)
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: '/x', toolName: 'grep', toolArgs: { pattern: 'foo' } }, db, opts());
+    handle('preToolUse', { sessionId: sid, timestamp: 110, cwd: '/x', toolName: 'view', toolArgs: { path: '/a' } }, db, opts());
+    // view finishes first, then grep — name-only matching could mis-pair; hash must not
+    handle('postToolUse', { sessionId: sid, timestamp: 160, toolName: 'view', toolArgs: { path: '/a' } }, db, opts());
+    handle('postToolUse', { sessionId: sid, timestamp: 230, toolName: 'grep', toolArgs: { pattern: 'foo' } }, db, opts());
+    const grep = db.get("SELECT * FROM spans WHERE name='grep'", []);
+    const view = db.get("SELECT * FROM spans WHERE name='view'", []);
+    assert.equal(view.duration_ms, 50);   // 160 - 110
+    assert.equal(grep.duration_ms, 130);  // 230 - 100
+    assert.equal(view.success, 1);
+    assert.equal(grep.success, 1);
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+test('skill phase detected from toolArgs (real CLI field name)', () => {
+  const { db, path } = freshDb();
+  try {
+    const sid = 's-7';
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: '/x', prompt: 'p' }, db, opts());
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: '/x', toolName: 'skill', toolArgs: { skill: 'systematic-debugging' } }, db, opts());
+    const ph = db.get("SELECT * FROM phases WHERE session_id=? AND skill='systematic-debugging'", [sid]);
+    assert.equal(ph.kind, 'skill');
+    assert.equal(ph.status, 'active');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+test('args-hash matching survives same-args duplicate (approx, no crash)', () => {
+  const { db, path } = freshDb();
+  try {
+    const sid = 's-8';
+    handle('sessionStart', { sessionId: sid, timestamp: 0, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: sid, timestamp: 10, cwd: '/x', prompt: 'p' }, db, opts());
+    handle('preToolUse', { sessionId: sid, timestamp: 100, cwd: '/x', toolName: 'bash', toolArgs: { command: 'ls' } }, db, opts());
+    handle('preToolUse', { sessionId: sid, timestamp: 120, cwd: '/x', toolName: 'bash', toolArgs: { command: 'ls' } }, db, opts());
+    handle('postToolUse', { sessionId: sid, timestamp: 200, toolName: 'bash', toolArgs: { command: 'ls' } }, db, opts());
+    handle('postToolUse', { sessionId: sid, timestamp: 260, toolName: 'bash', toolArgs: { command: 'ls' } }, db, opts());
+    const spans = db.all("SELECT * FROM spans WHERE name='bash' ORDER BY started_at", []);
+    assert.equal(spans.length, 2);
+    // both closed, both durations non-negative (exact pairing is approximate)
+    for (const sp of spans) {
+      assert.notEqual(sp.ended_at, null);
+      assert.ok(sp.duration_ms >= 0);
+    }
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});

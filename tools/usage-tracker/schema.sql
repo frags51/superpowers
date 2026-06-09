@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS spans (
   started_at   INTEGER,
   ended_at     INTEGER,
   duration_ms  INTEGER,
-  success      INTEGER
+  success      INTEGER,
+  match_key    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS subagents (

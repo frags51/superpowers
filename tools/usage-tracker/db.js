@@ -75,11 +75,21 @@ class Sqlite3CliDb {
   close() { /* CLI is stateless */ }
 }
 
+// Lightweight forward migrations for DBs created before a column existed.
+// SQLite has no "ADD COLUMN IF NOT EXISTS", so we attempt and ignore the
+// "duplicate column" error (also harmless on fresh DBs that already have it).
+function migrate(db) {
+  const tryRun = (sql) => { try { db.run(sql); } catch { /* already applied */ } };
+  tryRun('ALTER TABLE spans ADD COLUMN match_key TEXT');
+  tryRun('CREATE INDEX IF NOT EXISTS idx_spans_match ON spans(session_id, match_key)');
+}
+
 export function openDb(path) {
   mkdirSync(dirname(path), { recursive: true });
   const sqlite = loadNodeSqlite();
-  if (sqlite) return new NodeSqliteDb(path);
-  return new Sqlite3CliDb(path);
+  const db = sqlite ? new NodeSqliteDb(path) : new Sqlite3CliDb(path);
+  migrate(db);
+  return db;
 }
 
 export function defaultDbPath(env = process.env) {

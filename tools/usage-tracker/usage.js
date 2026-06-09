@@ -1,6 +1,32 @@
 // Pure helpers: cumulative-snapshot deltas and transcript token sums.
 import { readFileSync } from 'node:fs';
 
+// Stable JSON stringify (object keys sorted) so equal inputs hash equal
+// regardless of key order. Arrays keep their order.
+export function canonicalJson(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return '[' + v.map(canonicalJson).join(',') + ']';
+  const keys = Object.keys(v).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalJson(v[k])).join(',') + '}';
+}
+
+// FNV-1a 32-bit hash: very fast, non-cryptographic. Good enough to bucket
+// pre/post tool calls by their (name + arguments) fingerprint.
+export function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+// Approximate match key for pairing a preToolUse with its postToolUse when the
+// Copilot CLI hook payloads carry no shared tool-call id. Fast and order-stable.
+export function toolMatchKey(toolName, args) {
+  return fnv1a((toolName || '') + '\u0000' + canonicalJson(args === undefined ? null : args));
+}
+
 // rows: usage_snapshots ordered by captured_at ASC (any order accepted).
 // Returns deltas between the last snapshot at/before startMs (baseline)
 // and the last snapshot at/before endMs (end). Null when not derivable.

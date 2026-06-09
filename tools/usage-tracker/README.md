@@ -16,7 +16,12 @@ The Copilot CLI fires lifecycle hooks; `tracker.js` turns them into rows:
 - **phases** — one per `skill` activation (brainstorming, writing-plans,
   requesting-code-review, …) plus an implicit `root` phase per task. Carries the
   AI-credit/premium/cost deltas and output-token sums for that phase.
-- **spans** — child tool invocations under a phase.
+- **spans** — child tool invocations under a phase, each with its
+  **`duration_ms`** (tool-use latency). Because the Copilot CLI tool hooks carry
+  no shared call id, a `preToolUse` is paired with its `postToolUse` by a fast
+  args fingerprint (`match_key = fnv1a(toolName + canonicalJson(toolArgs))`),
+  falling back to tool name. Approximate but cheap; identical concurrent
+  name+args calls may swap durations.
 - **subagents** — every dispatched subagent with its `description` (what it is
   working on), start/stop, and a *reliable-only* duration.
 - **usage_snapshots** — raw cumulative usage captured by the statusline, the
@@ -131,6 +136,12 @@ sqlite3 "$DB" "SELECT feature, date(started_at/1000,'unixepoch') d, SUM(total_to
 
 # Subagent latency (reliable pairings only)
 sqlite3 "$DB" "SELECT agent_name, AVG(duration_ms) FROM subagents WHERE duration_reliable=1 GROUP BY agent_name;"
+
+# Tool-use latency by tool (avg/max ms)
+sqlite3 "$DB" "SELECT name, COUNT(*) n, ROUND(AVG(duration_ms)) avg_ms, MAX(duration_ms) max_ms FROM spans WHERE kind='tool' AND duration_ms IS NOT NULL GROUP BY name ORDER BY avg_ms DESC;"
+
+# Time spent in tools per phase/skill
+sqlite3 "$DB" "SELECT p.skill, SUM(s.duration_ms) tool_ms FROM spans s JOIN phases p ON s.phase_id=p.phase_id WHERE s.duration_ms IS NOT NULL GROUP BY p.skill ORDER BY tool_ms DESC;"
 
 # Most expensive tasks by credits
 sqlite3 "$DB" "SELECT task_id, feature, ROUND(SUM(aiu_delta),3) c FROM phases GROUP BY task_id ORDER BY c DESC LIMIT 10;"

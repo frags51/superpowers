@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import {
   openDb, defaultDbPath, nowMs, genId, gitBranch, gitRepo, isMainModule,
 } from './db.js';
-import { snapshotDelta, sumOutputTokens } from './usage.js';
+import { snapshotDelta, sumOutputTokens, toolMatchKey } from './usage.js';
 
 const EXCERPT_LEN = 120;
 
@@ -29,6 +29,10 @@ function normalizeOpts(o = {}) {
 
 const sid = (p) => p.sessionId || p.session_id;
 const ts = (p) => (typeof p.timestamp === 'number' ? p.timestamp : nowMs());
+
+// Copilot CLI tool hooks deliver arguments under `toolArgs`; accept the older
+// `toolInput`/`arguments` shapes too for robustness.
+const toolArgsOf = (p) => (p.toolArgs ?? p.toolInput ?? p.arguments ?? {});
 
 function activeTask(db, s) {
   return db.get('SELECT * FROM tasks WHERE session_id=? AND ended_at IS NULL ORDER BY turn_index DESC LIMIT 1', [s]);
@@ -116,9 +120,13 @@ function ensureActiveTask(db, s, p, opts) {
 function closeSpan(db, p, success) {
   const s = sid(p);
   const at = ts(p);
+  const key = toolMatchKey(p.toolName, toolArgsOf(p));
   let span;
   if (p.toolCallId) {
     span = db.get('SELECT * FROM spans WHERE tool_call_id=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1', [p.toolCallId]);
+  }
+  if (!span) {
+    span = db.get('SELECT * FROM spans WHERE session_id=? AND match_key=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1', [s, key]);
   }
   if (!span) {
     span = db.get('SELECT * FROM spans WHERE session_id=? AND name=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1', [s, p.toolName]);
@@ -164,7 +172,7 @@ const HANDLERS = {
     const at = ts(p);
     const task = ensureActiveTask(db, s, p, opts);
     const toolName = p.toolName;
-    const input = p.toolInput || {};
+    const input = toolArgsOf(p);
     if (toolName === 'skill') {
       const cur = activePhase(db, s);
       if (cur) closePhase(db, cur, at, opts);
@@ -180,8 +188,8 @@ const HANDLERS = {
       detail = input.skill || null;
     }
     db.run(
-      "INSERT INTO spans (span_id, phase_id, task_id, session_id, kind, name, detail, tool_call_id, started_at) VALUES (?,?,?,?, 'tool', ?,?,?,?)",
-      [genId(), phase ? phase.phase_id : null, task.task_id, s, toolName, detail, p.toolCallId || null, at],
+      "INSERT INTO spans (span_id, phase_id, task_id, session_id, kind, name, detail, tool_call_id, started_at, match_key) VALUES (?,?,?,?, 'tool', ?,?,?,?,?)",
+      [genId(), phase ? phase.phase_id : null, task.task_id, s, toolName, detail, p.toolCallId || null, at, toolMatchKey(toolName, input)],
     );
   },
 
