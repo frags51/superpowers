@@ -1,6 +1,6 @@
 {
   "name": "superpowers",
-  "description": "Core skills library for Claude Code: TDD, debugging, collaboration patterns, and proven techniques",
+  "description": "GHCP-native core skills library for the GitHub Copilot CLI: TDD, debugging, collaboration patterns, and plugin agents.",
   "version": "5.1.0",
   "author": {
     "name": "Jesse Vincent",
