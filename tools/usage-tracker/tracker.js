@@ -283,4 +283,23 @@ function main() {
 }
 
 const isMain = isMainModule(import.meta.url);
-if (isMain) main();
+if (isMain) {
+  const arg = process.argv[2] || '';
+  if (arg === '--selftest') {
+    // Selftest reports real failures via a non-zero exit (used by tests/CI).
+    main();
+  } else {
+    // Hook mode is FAIL-OPEN: a usage-tracking hook must never block or deny the
+    // user's tool. preToolUse hooks are fail-closed in Copilot CLI — any non-zero
+    // exit, timeout, or unhandled rejection would DENY the tool — so we guarantee
+    // a clean exit 0 no matter what happens.
+    process.exitCode = 0;
+    process.on('uncaughtException', () => process.exit(0));
+    process.on('unhandledRejection', () => process.exit(0));
+    try {
+      Promise.resolve().then(main).catch(() => process.exit(0));
+    } catch {
+      process.exit(0);
+    }
+  }
+}

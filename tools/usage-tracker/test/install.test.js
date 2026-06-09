@@ -24,11 +24,13 @@ test('buildHooksConfig wires all lifecycle events with absolute tracker path', (
   ]);
   const entry = cfg.hooks.sessionStart[0];
   assert.equal(entry.type, 'command');
-  assert.equal(entry.bash, 'node "/abs/tracker.js" sessionStart');
-  assert.equal(entry.powershell, 'node "/abs/tracker.js" sessionStart');
+  // fail-open: commands reference the tracker, pass the event, and force exit 0
+  assert.match(entry.bash, /node "\/abs\/tracker\.js" sessionStart/);
+  assert.match(entry.bash, /exit 0$/);
+  assert.match(entry.powershell, /node "\/abs\/tracker\.js" sessionStart/);
+  assert.match(entry.powershell, /exit 0$/);
   assert.equal(entry.timeoutSec, 5);
-  // each event passes its own name as the argument
-  assert.equal(cfg.hooks.subagentStop[0].bash, 'node "/abs/tracker.js" subagentStop');
+  assert.match(cfg.hooks.subagentStop[0].bash, /tracker\.js" subagentStop/);
 });
 
 test('HOOKS_FILE_NAME is the standalone hooks filename', () => {

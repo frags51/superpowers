@@ -249,6 +249,17 @@ sqlite3 "$DB" "SELECT p.skill, SUM(s.duration_ms) tool_ms FROM spans s JOIN phas
 sqlite3 "$DB" "SELECT task_id, feature, ROUND(SUM(aiu_delta),3) c FROM phases GROUP BY task_id ORDER BY c DESC LIMIT 10;"
 ```
 
+## Reliability (fail-open)
+
+Copilot CLI runs `preToolUse` hooks **fail-closed**: if a hook command exits
+non-zero or times out, the tool it guards is **denied**. A usage-tracking hook
+must never block your work, so every tracking command is **fail-open** — it
+swallows output and **always exits 0**, regardless of whether `node` is present,
+the database is locked, or the tracker throws. (`tracker.js` also installs
+`uncaughtException`/`unhandledRejection` guards in hook mode.) The worst case is
+a missed data point, never a blocked tool. The `failopen.test.js` suite asserts
+exit 0 across malformed input, unknown events, and an unwritable database.
+
 ## Tests
 
 Zero-dependency, using Node's built-in test runner:

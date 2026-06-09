@@ -46,12 +46,15 @@ export function applyUninstall(settings) {
 }
 
 // Self-contained Copilot CLI hooks config (camelCase event keys, absolute paths).
-// Each event runs `node <trackerPath> <event>`; the hook payload arrives on stdin.
+// Each event runs the tracker with the event name; the hook payload arrives on
+// stdin. These commands are FAIL-OPEN: preToolUse hooks are fail-closed in
+// Copilot CLI (a non-zero exit / timeout DENIES the tool), so every command
+// swallows output and always exits 0 — a usage-tracking hook must never block.
 export function buildHooksConfig(trackerPath) {
   const cmd = (event) => ({
     type: 'command',
-    bash: `node "${trackerPath}" ${event}`,
-    powershell: `node "${trackerPath}" ${event}`,
+    bash: `node "${trackerPath}" ${event} >/dev/null 2>&1; exit 0`,
+    powershell: `try { node "${trackerPath}" ${event} *> $null } catch { }; exit 0`,
     timeoutSec: 5,
   });
   const hooks = {};
