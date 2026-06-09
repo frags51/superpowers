@@ -106,7 +106,7 @@ sqlite3 "$DB" "SELECT task_id, feature, ROUND(SUM(aiu_delta),3) c FROM phases GR
 Zero-dependency, using Node's built-in test runner:
 
 ```bash
-cd vendor/superpowers && node --test tools/usage-tracker/test/
+cd vendor/superpowers && node --test 'tools/usage-tracker/test/*.test.js'
 node tools/usage-tracker/tracker.js --selftest
 ```
 
