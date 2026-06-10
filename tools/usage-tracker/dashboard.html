@@ -119,6 +119,9 @@
       <input type="datetime-local" id="range-to" aria-label="To date and time" />
     </span>
   </div>
+  <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;cursor:pointer;white-space:nowrap;">
+    <input type="checkbox" id="hide-root" style="accent-color:var(--accent);"> Hide root
+  </label>
   <span class="meta" id="meta"></span>
   <button class="primary" id="refresh">↻ Refresh</button>
 </header>
@@ -229,8 +232,9 @@ function legend() {
 function repoItem(repo, repoMax) {
   const brMax = Math.max(...repo.branches.map(b => b.durationMs), 1);
   const branches = repo.branches.map((b) => {
-    const skMax = Math.max(...b.skills.map(s => s.durationMs), 1);
-    const skills = b.skills.map((s) => `
+    const visSkills = hideRoot ? b.skills.filter(s => s.skill !== '(root)') : b.skills;
+    const skMax = Math.max(...visSkills.map(s => s.durationMs), 1);
+    const skills = visSkills.map((s) => `
       <div class="skill-row">
         <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
           <span class="ts">· started ${ts(s.firstAt)}</span></span>
@@ -349,14 +353,15 @@ function sessionsLegend() {
 }
 
 function sessionItem(se, seMax) {
-  const skMax = Math.max(...se.skills.map(s => s.durationMs), 1);
+  const visSkills = hideRoot ? se.skills.filter(s => s.skill !== '(root)') : se.skills;
+  const skMax = Math.max(...visSkills.map(s => s.durationMs), 1);
   const sub = se.subagentCount
     ? ` · 🤖 ${num(se.subagentCount)} subagent${se.subagentCount === 1 ? '' : 's'}`
       + (se.subagentRunning ? ` (${num(se.subagentRunning)} running)` : '')
     : '';
   const summary = `<div class="skill-row"><span class="meta grow">🔧 ${num(se.toolCount)} tool calls`
     + ` · ${sec(se.toolDurationMs)} in tools${sub}</span></div>`;
-  const skills = se.skills.map((s) => `
+  const skills = visSkills.map((s) => `
     <div class="skill-row">
       <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
         <span class="ts">· started ${ts(s.firstAt)}</span></span>
@@ -392,8 +397,8 @@ function tasksLegend() {
 }
 
 function taskItem(tk, tkMax) {
-  const skMax = Math.max(...tk.skills.map(s => s.durationMs), 1);
   const visSkills = hideRoot ? tk.skills.filter(s => s.skill !== '(root)') : tk.skills;
+  const skMax = Math.max(...visSkills.map(s => s.durationMs), 1);
   const skills = visSkills.map((s) => `
     <div class="skill-row">
       <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
@@ -672,6 +677,12 @@ function setTab(name) {
 
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => setTab(t.dataset.tab)));
 $('#refresh').addEventListener('click', load);
+$('#hide-root').addEventListener('change', () => {
+  hideRoot = $('#hide-root').checked;
+  renderUsageBody();
+  renderSessionsBody();
+  renderTasksBody();
+});
 
 const presetEl = $('#range-preset');
 const customEl = $('#custom-range');
