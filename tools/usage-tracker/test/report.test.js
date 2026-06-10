@@ -89,6 +89,43 @@ test('buildReport sessions: session -> skill with identity + credits + duration'
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 
+test('buildReport sessions: live snapshot AIC recovers an unfinalized open phase', () => {
+  const { db, path } = seed();
+  try {
+    // s1's writing-plans phase is still OPEN with a NULL aiu_delta (its usage is
+    // not finalized yet). Snapshots show the session's cumulative AIC climbing to
+    // 0.9 — the session headline should reflect that, not just the closed delta.
+    db.run("UPDATE phases SET status='active', aiu_delta=NULL WHERE phase_id='p2'");
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES ('s1', 1500, 0.10)");
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES ('s1', 6000, 0.90)");
+    const r = buildReport(db);
+    const byId = Object.fromEntries(r.sessions.map((s) => [s.sessionId, s]));
+    // Live AIC = last snapshot (0.90) minus the session's 0 origin.
+    assert.equal(Math.round(byId['s1'].aiu * 100), 90);
+    // s2 has no snapshots -> falls back to its summed phase delta (0.05).
+    assert.equal(Math.round(byId['s2'].aiu * 100), 5);
+    // Totals stay consistent with the per-session live values (0.90 + 0.05).
+    assert.equal(Math.round(r.totals.aiu * 100), 95);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+test('buildReport sessions: snapshot AIC is windowed by the time range', () => {
+  const { db, path } = seed();
+  try {
+    // Put an s1 phase inside the window so the (phase-driven) session list
+    // includes s1 for this range.
+    db.run("UPDATE phases SET started_at=5000 WHERE phase_id='p1'");
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES ('s1', 1000, 2.0)");
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES ('s1', 5000, 5.0)");
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES ('s1', 9000, 9.0)");
+    // Window [4000, 8000]: usage = value at/through 8000 (5.0) minus baseline
+    // just before 4000 (2.0) = 3.0.
+    const r = buildReport(db, { from: 4000, to: 8000 });
+    const s1 = r.sessions.find((s) => s.sessionId === 's1');
+    assert.equal(Math.round(s1.aiu * 100), 300);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
 test('buildReport tools aggregates count + durations', () => {
   const { db, path } = seed();
   try {

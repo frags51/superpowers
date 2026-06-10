@@ -469,3 +469,42 @@ test('real plugin payload: edit path in tool_input re-attributes worktree branch
     rmSync(path, { force: true });
   }
 });
+
+// Regression: in kick-off-style sessions the CLI fires userPromptSubmitted
+// *before* sessionStart (the session is created by the prompt itself).
+// sessionStart was closing the phase opened by userPromptSubmitted and never
+// reopening one, so all AIU snapshots captured between sessionStart and
+// sessionEnd were silently dropped (aiu_delta=0 despite real usage).
+test('late sessionStart reopens root phase so AIU is not dropped', () => {
+  const { db, path } = freshDb();
+  try {
+    const s = 'kickoff-1';
+    const T0 = 1_781_068_558_565;
+
+    // userPromptSubmitted fires first — opens task + root phase.
+    handle('userPromptSubmitted', { sessionId: s, timestamp: T0, cwd: '/x', prompt: 'Do the thing' }, db, opts());
+    const phase0 = db.get("SELECT * FROM phases WHERE session_id=? AND kind='root'", [s]);
+    assert.ok(phase0, 'root phase should exist after userPromptSubmitted');
+    assert.equal(phase0.status, 'active');
+
+    // sessionStart arrives 2 s later (late delivery).
+    const T1 = T0 + 2000;
+    handle('sessionStart', { sessionId: s, timestamp: T1, cwd: '/x' }, db, opts());
+
+    // The original phase should be closed.
+    const closed = db.get('SELECT status FROM phases WHERE phase_id=?', [phase0.phase_id]);
+    assert.equal(closed.status, 'closed');
+
+    // A new root phase must be open so subsequent usage is attributed.
+    const phase1 = db.get("SELECT * FROM phases WHERE session_id=? AND kind='root' AND status='active'", [s]);
+    assert.ok(phase1, 'a new root phase must be active after late sessionStart');
+    assert.equal(phase1.started_at, T1);
+
+    // The task must still be active.
+    const task = db.get('SELECT * FROM tasks WHERE session_id=? AND ended_at IS NULL', [s]);
+    assert.ok(task, 'task must remain active');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});

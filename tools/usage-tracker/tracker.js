@@ -258,6 +258,10 @@ const HANDLERS = {
     closeOpenSpans(db, s, at);
     let ph;
     while ((ph = activePhase(db, s))) closePhase(db, ph, at, opts);
+    // If userPromptSubmitted already opened a task before sessionStart arrived
+    // (kick-off-style sessions), reopen a root phase so usage is attributed.
+    const existingTask = activeTask(db, s);
+    if (existingTask) openPhase(db, existingTask, s, existingTask.feature, null, 'root', at);
     db.run("UPDATE subagents SET status='stopped', stop_reason='stale', ended_at=? WHERE session_id=? AND status='running'", [at, s]);
   },
 

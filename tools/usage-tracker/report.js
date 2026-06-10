@@ -150,16 +150,45 @@ export function buildReport(db, opts = {}) {
     subBySess.set(row.sid, { count: n(row.c), running: n(row.running) });
   }
 
+  // Live per-session AI credits, read straight from the cumulative usage
+  // snapshots. A session's `aiu` counter is session-scoped (it starts at 0), so
+  // its credit usage within the window is (snapshot value at the window's end)
+  // minus (value just before the window's start). This captures usage that is
+  // still sitting in the session's OPEN phase — whose aiu_delta has not been
+  // finalized yet — so a fresh session (one open root phase, aiu_delta = NULL)
+  // no longer sums to 0 while the status line shows real AIC. Sessions with no
+  // snapshots (e.g. recorded before the statusLine collector was installed) fall
+  // back to the summed phase deltas.
+  const aiuToExpr = r.to != null ? `CASE WHEN captured_at <= ${r.to} THEN aiu END` : 'aiu';
+  const aiuFromExpr = r.from != null ? `CASE WHEN captured_at < ${r.from} THEN aiu END` : 'NULL';
+  const liveAiuBySession = new Map();
+  for (const row of db.all(`
+    SELECT session_id        AS sid,
+           MAX(${aiuToExpr})   AS aiu_to,
+           MAX(${aiuFromExpr}) AS aiu_from
+    FROM usage_snapshots
+    GROUP BY session_id`)) {
+    if (row.aiu_to == null) continue; // no snapshot reaches this window
+    const live = Number(row.aiu_to) - (row.aiu_from == null ? 0 : Number(row.aiu_from));
+    liveAiuBySession.set(row.sid, Math.max(0, live));
+  }
+
   const sessions = [...sessMap.values()].map((se) => {
     const t = toolBySess.get(se.sessionId) || { count: 0, durationMs: 0 };
     const sub = subBySess.get(se.sessionId) || { count: 0, running: 0 };
+    const aiu = liveAiuBySession.has(se.sessionId) ? liveAiuBySession.get(se.sessionId) : se.aiu;
     return {
       ...se,
+      aiu,
       toolCount: t.count, toolDurationMs: t.durationMs,
       subagentCount: sub.count, subagentRunning: sub.running,
       skills: se.skills.sort((a, z) => z.durationMs - a.durationMs),
     };
   }).sort((a, z) => (z.startedAt ?? z.firstAt ?? 0) - (a.startedAt ?? a.firstAt ?? 0));
+
+  // Headline AIC is the sum of the per-session live values, so the chip total
+  // stays consistent with the (now snapshot-backed) sessions list.
+  totals.aiu = sessions.reduce((acc, se) => acc + se.aiu, 0);
 
   // --- Top tools -------------------------------------------------------------
   // Per-tool duration percentiles (P75/P95) are computed in JS from the sorted
