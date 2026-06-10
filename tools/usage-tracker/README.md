@@ -32,9 +32,10 @@ The Copilot CLI fires lifecycle hooks; `tracker.js` turns them into rows:
   name+args calls may swap durations.
 - **subagents** — every dispatched subagent with its `description` (what it is
   working on), start/stop, and a *reliable-only* duration.
-- **usage_snapshots** — raw cumulative usage captured by a **headless snapshot
-  collector** (wired as a no-output `statusLine`), the source for phase credit
-  deltas. There is **no visible status line**.
+- **usage_snapshots** — raw cumulative usage captured by a **snapshot
+  collector** (wired as the `statusLine`), the source for phase credit deltas.
+  The status line shows the session's cumulative **AI credits** (e.g. `⚡ 12.34
+  AIC`).
 
 See the full schema and rationale in
 `docs/superpowers/specs/2026-06-08-superpowers-usage-tracking-design.md`
@@ -104,9 +105,10 @@ the page for you.
 
 No hook carries token/credit data, so:
 
-- **Credits / premium / cost**: the headless `snapshot.js` (wired as a no-output
+- **Credits / premium / cost**: the `snapshot.js` collector (wired as the
   `statusLine`) records the CLI's cumulative `statusObject` figures into
-  `usage_snapshots`. A phase's usage is the **delta** of snapshots across its
+  `usage_snapshots` and renders the session's AI credits in the status line
+  (`⚡ <AIC> AIC`). A phase's usage is the **delta** of snapshots across its
   time window.
 - **Tokens**: summed from the session transcript (`events.jsonl`). The local
   transcript exposes **output** tokens only, so `input_tokens` is reserved
@@ -144,8 +146,8 @@ generated asynchronously by the CLI, very new sessions may not have a title yet.
 
 Tracking **hooks** load automatically when the superpowers plugin is installed
 via `/plugin`. Run the installer once to write the standalone hooks file and the
-headless snapshot collector (which records AI-credit usage with no visible
-status line — a plugin manifest cannot set it):
+snapshot collector (which records AI-credit usage and shows it in the status
+line — a plugin manifest cannot set it):
 
     node vendor/superpowers/tools/usage-tracker/install.js
     # hooks only, no credit snapshots:
@@ -425,7 +427,7 @@ well under 1 ms, and the hooks are fail-open so they never block a tool.
   descriptions remain correct. Always filter on `duration_reliable=1` for timing.
 - **Output tokens only** locally (input tokens aren't in `events.jsonl`).
 - **Snapshot cadence** bounds credit/cost delta precision to how often the CLI
-  re-renders the (headless) statusLine; token sums are exact.
+  re-renders the statusLine; token sums are exact.
 - The built-in **`general-purpose`** subagent historically does not emit
   subagent hooks, so those background tasks are not counted; `explore`, `task`,
   `code-review`, and plugin agents are.

@@ -2,10 +2,27 @@
 //
 // Wired as the Copilot CLI `statusLine` command — the ONLY way to receive the
 // cumulative usage `statusObject` (AI credits, premium requests, cost, model).
-// It records a `usage_snapshots` row and prints NOTHING, so there is no visible
-// status line; phase credit/cost deltas are derived from these snapshots.
+// It records a `usage_snapshots` row (the source for phase credit/cost deltas)
+// and prints a brief status line showing the session's cumulative AI credits.
 import { readFileSync } from 'node:fs';
 import { openDb, defaultDbPath, nowMs, isMainModule } from './db.js';
+
+// Build the brief status-line text shown in the Copilot CLI: a ⚡ icon plus the
+// session's cumulative AI credits (AIC). Prefers the CLI's pre-formatted value,
+// falling back to the raw number. Returns '' when no AIC is available (e.g. an
+// empty statusObject), so the status line simply stays blank.
+export function formatStatusLine(s) {
+  const used = s && s.ai_used;
+  if (!used) return '';
+  let label = null;
+  if (used.formatted != null && String(used.formatted).trim() !== '') {
+    label = String(used.formatted).trim();
+  } else if (used.value != null && Number.isFinite(Number(used.value))) {
+    label = Number(used.value).toLocaleString();
+  }
+  if (label == null) return '';
+  return `⚡ ${label} AIC`;
+}
 
 export function extractSnapshot(s) {
   const cw = s.context_window || {};
@@ -41,7 +58,9 @@ function main() {
       } finally { db.close(); }
     } catch { /* tracking is best-effort; never disrupt the session */ }
   }
-  // Intentionally print nothing: the status line stays empty.
+  // Display the cumulative AI credits in the status line (blank if unavailable).
+  const line = formatStatusLine(s);
+  if (line) process.stdout.write(line + '\n');
 }
 
 const isMain = isMainModule(import.meta.url);

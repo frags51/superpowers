@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractSnapshot } from '../snapshot.js';
+import { extractSnapshot, formatStatusLine } from '../snapshot.js';
 
 test('extractSnapshot pulls cumulative fields from statusObject', () => {
   const s = {
@@ -25,4 +25,18 @@ test('extractSnapshot tolerates an empty statusObject', () => {
   assert.equal(snap.session_id, null);
   assert.equal(snap.aiu, null);
   assert.equal(snap.model, null);
+});
+
+test('formatStatusLine renders the AIC with a ⚡ icon', () => {
+  assert.equal(formatStatusLine({ ai_used: { formatted: '0.42', value: 0.42 } }), '⚡ 0.42 AIC');
+});
+
+test('formatStatusLine falls back to the numeric value', () => {
+  assert.equal(formatStatusLine({ ai_used: { value: 1234.5 } }), `⚡ ${(1234.5).toLocaleString()} AIC`);
+});
+
+test('formatStatusLine is blank when no AI credits are present', () => {
+  assert.equal(formatStatusLine({}), '');
+  assert.equal(formatStatusLine({ ai_used: {} }), '');
+  assert.equal(formatStatusLine({ ai_used: { formatted: '  ' } }), '');
 });
