@@ -66,7 +66,42 @@ export function readShutdownSnapshot(transcriptPath, sessionId, capturedAt = now
   return null;
 }
 
-// Build the brief status line shown in the Copilot CLI when the snapshot is
+// Scan a session transcript for in-process subagent lifecycle events
+// (`subagent.started` / `subagent.completed`). The Copilot CLI runs `task`-tool
+// subagents inside the parent session and tags their hook activity with the
+// subagent's `agentId` (== the tool-call id, e.g. `toolu_bdrk_…`) as a phantom
+// `session_id`. These phantom sessions have no `usage_snapshots`, so they show
+// 0 AIC. The parent transcript is the only place that records each subagent's
+// id, agent name, and start/stop timestamps — which the report uses to attribute
+// AIC from the PARENT session's cumulative snapshots over the subagent's window.
+//
+// Returns [{ agentId, agentName, startedAt, endedAt }]; endedAt is null for a
+// subagent that started but has no completion event (still running / killed).
+export function subagentWindowsFromTranscript(transcriptPath) {
+  if (!transcriptPath) return [];
+  let raw;
+  try { raw = readFileSync(transcriptPath, 'utf8'); } catch { return []; }
+  const wins = new Map(); // agentId -> { agentName, startedAt, endedAt }
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    if (o.type !== 'subagent.started' && o.type !== 'subagent.completed') continue;
+    const d = o.data || {};
+    const agentId = o.agentId || d.toolCallId;
+    if (!agentId) continue;
+    const t = Date.parse(o.timestamp);
+    if (Number.isNaN(t)) continue;
+    const w = wins.get(agentId) || { agentName: null, startedAt: null, endedAt: null };
+    if (d.agentName && !w.agentName) w.agentName = d.agentName;
+    if (o.type === 'subagent.started') w.startedAt = t;
+    else w.endedAt = t;
+    wins.set(agentId, w);
+  }
+  return [...wins.entries()].map(([agentId, w]) => ({ agentId, ...w }));
+}
+
+
 // wired with `--debug`. Leads with the session's cumulative AI credits (the
 // exact value from `aiuFromStatus`, never the lossy `formatted` string) and
 // appends the rest of the captured telemetry — premium requests, cost, context

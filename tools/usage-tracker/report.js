@@ -11,7 +11,7 @@
 // Durations are milliseconds in the data; the UI formats them as seconds.
 import { join } from 'node:path';
 import { openDb, defaultDbPath, defaultSessionStorePath, loadSessionTitles, nowMs, isMainModule } from './db.js';
-import { readShutdownSnapshot } from './snapshot.js';
+import { readShutdownSnapshot, subagentWindowsFromTranscript } from './snapshot.js';
 
 const n = (v) => (v == null ? 0 : Number(v));
 const ts = (v) => (v == null ? null : Number(v));
@@ -227,11 +227,81 @@ export function buildReport(db, opts = {}) {
   // contribution.  We also record which sessions are child sessions so the
   // headline total is not double-counted (child AIC is credited to the parent).
   const childToParent = new Map(); // childSessionId -> parentSessionId
+  // In-process subagents (below) share the parent's session-scoped AIC counter,
+  // so their AIC is ALREADY inside the parent's own live value and must NOT be
+  // re-added to it (doing so doubles the parent). Separate child sessions (e.g.
+  // `copilot -p …` spawned via bash) have an independent counter and ARE added.
+  const inProcessChild = new Set(); // childSessionId whose AIC is a subset of its parent's
   for (const row of db.all('SELECT session_id AS parent, child_session_id AS child FROM subagents WHERE child_session_id IS NOT NULL')) {
+    // A session is never its own child. `task`-tool subagents run in-process and
+    // self-link (child_session_id == parent); skip them here — their AIC lives in
+    // the parent already and is broken out per-subagent via the phantom sessions
+    // recovered below.
+    if (row.child === row.parent) continue;
     childToParent.set(row.child, row.parent);
   }
+
+  // Recover in-process `task`-tool subagents that surfaced as 0-AIC "sessions":
+  // the CLI tags their hook activity with the subagent's tool-call id as a
+  // phantom session_id (no sessions-table row, no usage_snapshots). Read each
+  // real session's transcript for subagent.started/completed events, then
+  // attribute the parent's cumulative-snapshot delta over the subagent's window
+  // to the phantom session and nest it under the parent.
+  if (resolveTranscript) {
+    const realSessionIds = new Set(db.all('SELECT session_id FROM sessions').map((s) => s.session_id));
+    const phantomIds = new Set(
+      db.all('SELECT DISTINCT session_id AS sid FROM phases').map((p) => p.sid)
+        .filter((sid) => sid && !realSessionIds.has(sid)),
+    );
+    if (phantomIds.size) {
+      const snapsBySession = new Map(); // sessionId -> rows sorted asc by captured_at
+      const snapsFor = (sid) => {
+        if (!snapsBySession.has(sid)) {
+          snapsBySession.set(sid, db.all(
+            'SELECT captured_at, aiu FROM usage_snapshots WHERE session_id=? AND aiu IS NOT NULL ORDER BY captured_at',
+            [sid],
+          ));
+        }
+        return snapsBySession.get(sid);
+      };
+      for (const parentId of realSessionIds) {
+        const windows = subagentWindowsFromTranscript(resolveTranscript(parentId));
+        if (!windows.length) continue;
+        const parentSnaps = snapsFor(parentId);
+        if (!parentSnaps.length) continue;
+        for (const w of windows) {
+          if (!phantomIds.has(w.agentId) || w.startedAt == null) continue;
+          // Baseline = last snapshot at/before the subagent started (or the
+          // session's 0 origin). Endpoint = first snapshot at/after it ended —
+          // the subagent's usage lands in the parent's counter only once the
+          // statusLine refreshes after it returns (it cannot fire while a sync
+          // subagent blocks the parent). Fall back to the last snapshot when no
+          // snapshot was captured after the window (e.g. still running).
+          let base = 0;
+          for (const s of parentSnaps) {
+            if (s.captured_at <= w.startedAt) base = Number(s.aiu); else break;
+          }
+          const endRef = w.endedAt == null ? Infinity : w.endedAt;
+          let end = null;
+          for (const s of parentSnaps) {
+            if (s.captured_at >= endRef) { end = Number(s.aiu); break; }
+          }
+          if (end == null) end = Number(parentSnaps[parentSnaps.length - 1].aiu);
+          liveAiuBySession.set(w.agentId, Math.max(0, end - base));
+          childToParent.set(w.agentId, parentId);
+          inProcessChild.add(w.agentId);
+          if (w.agentName) {
+            const se = sessMap.get(w.agentId);
+            if (se && !se.title) se.title = `${w.agentName} (subagent)`;
+          }
+        }
+      }
+    }
+  }
+
   const childAiuByParent = new Map(); // parentSessionId -> summed child live AIC
   for (const [childId, parentId] of childToParent) {
+    if (inProcessChild.has(childId)) continue; // already inside the parent's counter
     const childLive = liveAiuBySession.get(childId) ?? 0;
     childAiuByParent.set(parentId, (childAiuByParent.get(parentId) ?? 0) + childLive);
   }

@@ -320,6 +320,84 @@ test('buildReport: child session AIC rolls up into parent, headline total not do
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 
+// Regression: an in-process `task`-tool subagent self-links (its subagents row
+// carries child_session_id == the parent's own session_id, because the subagent
+// runs inside the parent session). buildReport must NOT add such a "child" back
+// into the parent — the AIC is already inside the parent's own session-scoped
+// counter — or the parent's AIC is doubled.
+test('buildReport: self-linked subagent (child==parent) does not double parent AIC', () => {
+  const path = join(tmpdir(), `sp-report-selflink-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at) VALUES ('par','repo','main',1000)");
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES ('par:0','par','main',0,1000)");
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES ('pp','par:0','par','main',null,'root',0,5000,0.0,0,'closed')");
+    // Parent's own cumulative snapshots climb to 10 AIC.
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES ('par', 1100, 0.0)");
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES ('par', 5000, 10.0)");
+    // A subagent that ran in-process: its child_session_id is the parent itself.
+    db.run("INSERT INTO subagents (subagent_id, session_id, phase_id, agent_name, child_session_id, started_at, status) VALUES ('sa1','par','pp','general-purpose','par',1200,'stopped')");
+
+    const r = buildReport(db);
+    const byId = Object.fromEntries(r.sessions.map((s) => [s.sessionId, s]));
+    assert.ok(Math.abs(byId['par'].aiu - 10.0) < 0.01,
+      `parent aiu should be 10.0 (not doubled) but got ${byId['par'].aiu}`);
+    assert.equal(byId['par'].parentSessionId, null, 'a session is never its own child');
+    assert.ok(Math.abs(r.totals.aiu - 10.0) < 0.01, `totals.aiu should be 10.0 but got ${r.totals.aiu}`);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+// Regression: in-process `task`-tool subagents have their hook activity recorded
+// under the subagent's toolCallId as a phantom "session" (no sessions-table row,
+// no usage_snapshots), so they surface as 0-AIC sessions. buildReport must
+// recover their AIC from the PARENT session's cumulative snapshots over the
+// subagent's [started, completed] window (read from the parent transcript's
+// subagent.started/completed events), nest them under the parent, and keep the
+// AIC out of the parent total and headline (it is already inside the parent's
+// session-scoped counter).
+test('buildReport: in-process subagent (phantom toolCallId session) gets windowed AIC from parent', () => {
+  const base = mkdtempSync(join(tmpdir(), 'sp-report-inproc-'));
+  const parentId = 'parent-sess';
+  const agentId = 'toolu_bdrk_TEST123';
+  const sessDir = join(base, 'session-state', parentId);
+  mkdirSync(sessDir, { recursive: true });
+  writeFileSync(join(sessDir, 'events.jsonl'),
+    JSON.stringify({ type: 'session.start', data: {} }) + '\n'
+    + JSON.stringify({ type: 'subagent.started', agentId, data: { toolCallId: agentId, agentName: 'general-purpose' }, timestamp: '2026-06-10T00:00:02.000Z' }) + '\n'
+    + JSON.stringify({ type: 'subagent.completed', agentId, data: { toolCallId: agentId }, timestamp: '2026-06-10T00:00:04.000Z' }) + '\n');
+
+  const path = join(tmpdir(), `sp-report-inproc-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    const T = Date.parse('2026-06-10T00:00:00.000Z');
+    const at = (s) => Date.parse(`2026-06-10T00:00:0${s}.000Z`);
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at, ended_at) VALUES (?,?,?,?,?)", [parentId, 'repo', 'main', T, at(9)]);
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES (?,?,?,?,?)", [`${parentId}:0`, parentId, 'main', 0, T]);
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)", ['pp', `${parentId}:0`, parentId, 'main', null, 'root', 0, 9000, 50.0, 0, 'closed']);
+    // Parent snapshots bracket the subagent window [t2, t4]: 20 AIC before, 32 after.
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES (?,?,?)", [parentId, at(1), 20.0]);
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES (?,?,?)", [parentId, at(5), 32.0]);
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES (?,?,?)", [parentId, at(9), 90.0]);
+    // Phantom session: the subagent's hook activity recorded under its toolCallId.
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES (?,?,?,?,?)", [`${agentId}:0`, agentId, '(unknown)', 0, at(2)]);
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)", ['ap', `${agentId}:0`, agentId, '(unknown)', null, 'root', 0, 2000, 0.0, 0, 'closed']);
+
+    const resolveTranscript = (s) => join(base, 'session-state', s, 'events.jsonl');
+    const r = buildReport(db, { resolveTranscript });
+    const byId = Object.fromEntries(r.sessions.map((s) => [s.sessionId, s]));
+
+    assert.ok(byId[agentId], 'phantom subagent session must appear');
+    assert.ok(Math.abs(byId[agentId].aiu - 12.0) < 0.01,
+      `phantom subagent AIC should be 12.0 (32 after - 20 before) but got ${byId[agentId].aiu}`);
+    assert.equal(byId[agentId].parentSessionId, parentId, 'phantom session must nest under parent');
+    // Parent total stays its own session counter (90 live), not inflated by the child subset.
+    assert.ok(Math.abs(byId[parentId].aiu - 90.0) < 0.01,
+      `parent aiu should be 90.0 (own live) but got ${byId[parentId].aiu}`);
+    // Headline excludes the nested child, so no double-count.
+    assert.ok(Math.abs(r.totals.aiu - 90.0) < 0.01, `totals.aiu should be 90.0 but got ${r.totals.aiu}`);
+  } finally { db.close(); rmSync(path, { force: true }); rmSync(base, { recursive: true, force: true }); }
+});
+
 // Regression: --autopilot / --acp sessions never invoke statusLine, so
 // usage_snapshots stays empty and AIC shows 0.  buildReport must reconcile by
 // reading session.shutdown from events.jsonl and persisting the snapshot to
