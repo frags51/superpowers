@@ -53,6 +53,26 @@ test('formatStatusLine falls back to the numeric value', () => {
   assert.equal(formatStatusLine({ ai_used: { value: 1234.5 } }), `⚡ ${(1234.5).toLocaleString()} AIC`);
 });
 
+test('formatStatusLine uses the exact AIU (total_nano_aiu), not lossy formatted', () => {
+  // 420000000 nano = 0.42 AIU; formatted "<0.01" would be wrong/lossy.
+  assert.equal(formatStatusLine({ ai_used: { total_nano_aiu: 420000000, formatted: '<0.01' } }), '⚡ 0.42 AIC');
+});
+
+test('formatStatusLine appends premium, cost, context %, and model when present', () => {
+  const line = formatStatusLine({
+    ai_used: { total_nano_aiu: 12340000000 },
+    cost: { total_premium_requests: 3, total: 0.5 },
+    context_window: { current_context_used_percentage: 18.4 },
+    model: { display_name: 'Opus 4.8' },
+  });
+  assert.equal(line, '⚡ 12.34 AIC · 3 prem · $0.50 · 18% ctx · Opus 4.8');
+});
+
+test('formatStatusLine omits fields that are absent', () => {
+  const line = formatStatusLine({ ai_used: { total_nano_aiu: 1000000000 }, model: { id: 'gpt-5' } });
+  assert.equal(line, '⚡ 1 AIC · gpt-5');
+});
+
 test('formatStatusLine is blank when no AI credits are present', () => {
   assert.equal(formatStatusLine({}), '');
   assert.equal(formatStatusLine({ ai_used: {} }), '');

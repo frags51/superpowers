@@ -5,25 +5,27 @@
 // It records a `usage_snapshots` row (the source for phase credit/cost deltas).
 // By default it prints NOTHING, so there is no visible status line. When invoked
 // with `--debug` (wired by `install.js --debug`), it also prints a brief status
-// line showing the session's cumulative AI credits (e.g. `⚡ 12.34 AIC`).
+// line with the captured telemetry — cumulative AI credits plus any premium
+// requests, cost, context usage, and model (e.g.
+// `⚡ 12.34 AIC · 3 prem · $0.50 · 18% ctx · Opus 4.8`).
 import { readFileSync } from 'node:fs';
 import { openDb, defaultDbPath, nowMs, isMainModule } from './db.js';
 
-// Build the brief status-line text shown in the Copilot CLI: a ⚡ icon plus the
-// session's cumulative AI credits (AIC). Prefers the CLI's pre-formatted value,
-// falling back to the raw number. Returns '' when no AIC is available (e.g. an
-// empty statusObject), so the status line simply stays blank.
+// Build the brief status line shown in the Copilot CLI when the snapshot is
+// wired with `--debug`. Leads with the session's cumulative AI credits (the
+// exact value from `aiuFromStatus`, never the lossy `formatted` string) and
+// appends the rest of the captured telemetry — premium requests, cost, context
+// usage, and model — including only the fields actually present. Returns '' when
+// no AI credits are available, so the status line simply stays blank.
 export function formatStatusLine(s) {
-  const used = s && s.ai_used;
-  if (!used) return '';
-  let label = null;
-  if (used.formatted != null && String(used.formatted).trim() !== '') {
-    label = String(used.formatted).trim();
-  } else if (used.value != null && Number.isFinite(Number(used.value))) {
-    label = Number(used.value).toLocaleString();
-  }
-  if (label == null) return '';
-  return `⚡ ${label} AIC`;
+  const snap = extractSnapshot(s);
+  if (snap.aiu == null) return '';
+  const parts = [`⚡ ${Number(snap.aiu).toLocaleString()} AIC`];
+  if (snap.premium_requests != null) parts.push(`${Number(snap.premium_requests).toLocaleString()} prem`);
+  if (snap.cost_total != null) parts.push(`$${Number(snap.cost_total).toFixed(2)}`);
+  if (snap.context_pct != null) parts.push(`${Math.round(Number(snap.context_pct))}% ctx`);
+  if (snap.model) parts.push(String(snap.model));
+  return parts.join(' · ');
 }
 
 // Exact cumulative AIU from the statusObject's `ai_used`. The Copilot CLI v1.x

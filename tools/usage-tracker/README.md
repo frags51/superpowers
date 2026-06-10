@@ -35,8 +35,9 @@ The Copilot CLI fires lifecycle hooks; `tracker.js` turns them into rows:
 - **usage_snapshots** — raw cumulative usage captured by a **snapshot
   collector** (wired as the `statusLine`), the source for phase credit deltas.
   By default there is **no visible status line**; install with `--debug`
-  (or `SUPERPOWERS_USAGE_DEBUG=1`) to also show the session's cumulative **AI
-  credits** (e.g. `⚡ 12.34 AIC`).
+  (or `SUPERPOWERS_USAGE_DEBUG=1`) to also show the captured telemetry — AI
+  credits plus any premium requests, cost, context usage, and model (e.g.
+  `⚡ 12.34 AIC · 3 prem · $0.50 · 18% ctx · Opus 4.8`).
 
 See the full schema and rationale in
 `docs/superpowers/specs/2026-06-08-superpowers-usage-tracking-design.md`
@@ -109,7 +110,8 @@ No hook carries token/credit data, so:
 - **Credits / premium / cost**: the `snapshot.js` collector (wired as the
   `statusLine`) records the CLI's cumulative `statusObject` figures into
   `usage_snapshots` (and, when installed with `--debug`, renders them as a
-  `⚡ <AIC> AIC` status line). A phase's usage is the **delta** of snapshots
+  `⚡ <AIC> AIC · … prem · $… · …% ctx · <model>` status line). A phase's usage
+  is the **delta** of snapshots
   across its
   time window.
 - **Tokens**: summed from the session transcript (`events.jsonl`). The local
