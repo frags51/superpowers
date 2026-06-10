@@ -179,23 +179,20 @@ export function buildReport(db, opts = {}) {
   // --autopilot / --acp / -p sessions where the statusLine command is never
   // invoked, leaving usage_snapshots empty and AIC showing as 0.
   //
-  // For each known session not yet in liveAiuBySession we read the
-  // `session.shutdown` event from its events.jsonl (always written by the CLI
-  // at exit, regardless of mode).  When found:
-  //   1. The snapshot is persisted to usage_snapshots so the DB stays accurate
-  //      and future report runs skip the file read.
-  //   2. liveAiuBySession is updated so the rest of this build uses real AIC.
+  // A single LEFT JOIN finds exactly the sessions that need work (those with
+  // NO snapshot rows at all), avoiding N per-session lookups.  After the
+  // INSERT below each session has a snapshot, so the next report build
+  // excludes it from the join and never re-reads its events.jsonl.
   //
   // opts.resolveTranscript(sessionId) → path; wired in main() below.
   const resolveTranscript = opts.resolveTranscript || null;
   if (resolveTranscript) {
-    const allSessions = db.all('SELECT session_id, ended_at FROM sessions');
-    for (const { session_id: s, ended_at } of allSessions) {
-      if (liveAiuBySession.has(s)) continue;
-      // Only reconcile if there are genuinely no snapshots (avoids re-reading files
-      // for sessions that simply had no activity in the current time window).
-      const hasAnySnap = db.get('SELECT 1 FROM usage_snapshots WHERE session_id=? LIMIT 1', [s]);
-      if (hasAnySnap) continue;
+    const noSnapSessions = db.all(`
+      SELECT s.session_id, s.ended_at
+      FROM sessions s
+      LEFT JOIN usage_snapshots us ON s.session_id = us.session_id
+      WHERE us.session_id IS NULL`);
+    for (const { session_id: s, ended_at } of noSnapSessions) {
       const transcriptPath = resolveTranscript(s);
       const capturedAt = ended_at != null ? Number(ended_at) : nowMs();
       const snap = readShutdownSnapshot(transcriptPath, s, capturedAt);
