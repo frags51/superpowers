@@ -58,7 +58,6 @@
   th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
   td.num, th.num { text-align:right; }
   h2 { font-size:14px; color:var(--muted); margin:24px 0 8px; text-transform:uppercase; letter-spacing:.05em; }
-  .tbar { display:inline-block; height:6px; background:var(--accent); border-radius:4px; vertical-align:middle; }
   .empty { color:var(--muted); padding:40px; text-align:center; }
   .callout { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent);
     border-radius:10px; padding:11px 14px; margin:0 0 14px; color:var(--muted); font-size:12.5px; }
@@ -70,6 +69,17 @@
   .callout code { background:var(--panel2); border:1px solid var(--line); border-radius:5px;
     padding:1px 5px; color:var(--fg); font-size:12px; }
   .hidden { display:none; }
+  th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+  th.sortable:hover { color:var(--fg); }
+  th.sortable .arrow { font-size:9px; margin-left:4px; opacity:.35; }
+  th.sortable.sorted { color:var(--fg); }
+  th.sortable.sorted .arrow { opacity:1; color:var(--accent); }
+  .filterbar { display:flex; align-items:center; gap:10px; margin:0 0 4px; }
+  .filterbar input { flex:1; max-width:320px; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:7px 11px; font-size:13px; font-family:inherit; }
+  .filterbar input:focus { outline:none; border-color:var(--accent); }
+  .filterbar .meta { white-space:nowrap; }
+  tr.filtered { display:none; }
 </style>
 </head>
 <body>
@@ -109,8 +119,20 @@
 
 <script>
 const $ = (s) => document.querySelector(s);
-const sec = (ms) => (Number(ms||0)/1000).toFixed(1) + 's';
-const aiu = (v) => (Number(v||0)).toFixed(3);
+// Durations are milliseconds. Show seconds (one decimal) under a minute, then
+// switch to clock format — M:SS under an hour, H:MM:SS at/above an hour — so
+// large totals stay readable instead of rendering as e.g. "1800.0s".
+const sec = (ms) => {
+  const s = Number(ms || 0) / 1000;
+  if (s < 60) return s.toFixed(1) + 's';
+  const total = Math.round(s);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const ss = total % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
+};
+const aic = (v) => Math.floor(Number(v||0)).toLocaleString();
 const num = (v) => Number(v||0).toLocaleString();
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pct = (v, max) => (max > 0 ? Math.max(2, Math.round((v/max)*100)) : 0);
@@ -125,15 +147,15 @@ let activeTab = 'usage';
 
 function chips(t) {
   const c = [
-    ['Sessions', num(t.sessions)], ['Tasks', num(t.tasks)], ['Phases', num(t.phases)],
-    ['Subagents', num(t.subagents)], ['AI credits', aiu(t.aiu) + ' AIU'],
-    ['Total time', sec(t.durationMs)], ['Tokens', num(t.tokens)],
+    ['Sessions', num(t.sessions)], ['Phases', num(t.phases)],
+    ['Subagents', num(t.subagents)], ['AI credits', aic(t.aiu) + ' AIC'],
+    ['Total time', sec(t.durationMs)],
   ];
   $('#chips').innerHTML = c.map(([k,v]) => `<div class="chip"><b>${v}</b><span>${k}</span></div>`).join('');
 }
 
 function nums(aiuVal, durMs) {
-  return `<span class="nums"><span class="credit">${aiu(aiuVal)} AIU</span>`
+  return `<span class="nums"><span class="credit">${aic(aiuVal)} AIC</span>`
        + `<span class="dur">${sec(durMs)}</span></span>`;
 }
 
@@ -216,6 +238,12 @@ function renderSessions(sessions) {
   const seMax = Math.max(...sessions.map(s => s.durationMs), 1);
   $('#view-sessions').innerHTML = sessionsLegend() + sessions.map((se) => {
     const skMax = Math.max(...se.skills.map(s => s.durationMs), 1);
+    const sub = se.subagentCount
+      ? ` · 🤖 ${num(se.subagentCount)} subagent${se.subagentCount === 1 ? '' : 's'}`
+        + (se.subagentRunning ? ` (${num(se.subagentRunning)} running)` : '')
+      : '';
+    const summary = `<div class="skill-row"><span class="meta grow">🔧 ${num(se.toolCount)} tool calls`
+      + ` · ${sec(se.toolDurationMs)} in tools${sub}</span></div>`;
     const skills = se.skills.map((s) => `
       <div class="skill-row">
         <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
@@ -232,49 +260,151 @@ function renderSessions(sessions) {
           <span class="ts">· started ${ts(se.startedAt ?? se.firstAt)}</span></span>
         <span class="bar"><i style="width:${pct(se.durationMs, seMax)}%"></i></span>
         ${nums(se.aiu, se.durationMs)}
-      </summary>${skills}</details>`;
+      </summary>${summary}${skills}</details>`;
   }).join('');
 }
 
-function barCell(v, max) {
-  return `<span class="tbar" style="width:${pct(v, max)}px"></span>`;
+// --- Stats tab: sortable + filterable analysis tables ----------------------
+// The Stats tab is for ad-hoc analysis of AI credits (AIC) and duration, so
+// every column is click-to-sort and the whole view is name-filterable. Data
+// comes straight from the report; sorting/filtering is pure client-side.
+const pctTxt = (v) => (Number(v || 0)).toFixed(0) + '%';
+const avgTxt = (v) => (v == null ? '—' : sec(v));
+const pctlTxt = (v) => (v == null ? '—' : sec(v));
+
+const STAT_DEFS = {
+  tools: {
+    title: 'Top tools', name: 'name', sort: 'count',
+    cols: [
+      { key: 'name', label: 'Tool', type: 'text', td: 'text', fmt: (v) => esc(v) },
+      { key: 'count', label: 'Count', type: 'num', td: 'num', fmt: num },
+      { key: 'p75Ms', label: 'P75', type: 'num', td: 'num', fmt: pctlTxt },
+      { key: 'p95Ms', label: 'P95', type: 'num', td: 'num', fmt: pctlTxt },
+      { key: 'totalMs', label: 'Total (sum)', type: 'num', td: 'num', fmt: sec },
+      { key: 'lastAt', label: 'Last active', type: 'num', td: 'ts', fmt: ts },
+    ],
+  },
+  skills: {
+    title: 'Superpowers phases (skills)', name: 'skill', sort: 'totalMs',
+    cols: [
+      { key: 'skill', label: 'Skill', type: 'text', td: 'text', fmt: (v) => esc(v) },
+      { key: 'count', label: 'Runs', type: 'num', td: 'num', fmt: num },
+      { key: 'totalMs', label: 'Total', type: 'num', td: 'num', fmt: sec },
+      { key: 'avgMs', label: 'Avg', type: 'num', td: 'num', fmt: sec },
+      { key: 'aiu', label: 'AIC', type: 'num', td: 'num', fmt: aic },
+      { key: 'firstAt', label: 'Started', type: 'num', td: 'ts', fmt: ts },
+      { key: 'lastAt', label: 'Last active', type: 'num', td: 'ts', fmt: ts },
+    ],
+  },
+  subagents: {
+    title: 'Subagents', name: 'name', sort: 'totalMs',
+    cols: [
+      { key: 'name', label: 'Agent', type: 'text', td: 'text', fmt: (v) => esc(v) },
+      { key: 'count', label: 'Total', type: 'num', td: 'num', fmt: num },
+      { key: 'running', label: 'Running', type: 'num', td: 'num', fmt: num },
+      { key: 'totalMs', label: 'Total dur', type: 'num', td: 'num', fmt: sec },
+      { key: 'avgMs', label: 'Avg (reliable)', type: 'num', td: 'num', fmt: avgTxt },
+      { key: 'maxMs', label: 'Max', type: 'num', td: 'num', fmt: sec },
+      { key: 'share', label: 'Share', type: 'num', td: 'num', fmt: pctTxt },
+      { key: 'firstAt', label: 'Started', type: 'num', td: 'ts', fmt: ts },
+      { key: 'lastAt', label: 'Last active', type: 'num', td: 'ts', fmt: ts },
+    ],
+  },
+};
+
+const statsSort = {
+  tools: { key: 'count', dir: -1 },
+  skills: { key: 'totalMs', dir: -1 },
+  subagents: { key: 'totalMs', dir: -1 },
+};
+let statsReport = null;
+let statsFilter = '';
+
+function sortRows(rows, key, dir) {
+  return rows.slice().sort((a, b) => {
+    const x = a[key]; const y = b[key];
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;            // nulls (e.g. unreliable avg) sort last
+    if (y == null) return -1;
+    if (typeof x === 'string' || typeof y === 'string') {
+      return String(x).localeCompare(String(y)) * dir;
+    }
+    return (x - y) * dir;
+  });
+}
+
+function statTable(id, def, rows) {
+  if (!rows.length) return '';
+  const st = statsSort[id];
+  const sorted = sortRows(rows, st.key, st.dir);
+  const head = def.cols.map((c) => {
+    const numCls = c.td === 'num' ? ' num' : '';
+    const isSorted = c.key === st.key;
+    const arrow = isSorted ? (st.dir < 0 ? '▼' : '▲') : '▲';
+    return `<th class="sortable${numCls}${isSorted ? ' sorted' : ''}" `
+         + `data-table="${id}" data-key="${c.key}" data-type="${c.type}">`
+         + `${c.label}<span class="arrow">${arrow}</span></th>`;
+  }).join('');
+  const body = sorted.map((rw) => {
+    const cells = def.cols.map((c) => {
+      const cls = c.td === 'num' ? ' class="num"' : c.td === 'ts' ? ' class="ts"' : '';
+      return `<td${cls}>${c.fmt(rw[c.key], rw)}</td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  return `<h2>${def.title}</h2><table><tr>${head}</tr>${body}</table>`;
+}
+
+function filterRows(rows, nameKey) {
+  if (!statsFilter) return rows;
+  return rows.filter((x) => String(x[nameKey]).toLowerCase().includes(statsFilter));
+}
+
+function renderStatsTables() {
+  const r = statsReport;
+  if (!r) return;
+  const sets = [
+    ['tools', filterRows(r.tools, STAT_DEFS.tools.name)],
+    ['skills', filterRows(r.skills, STAT_DEFS.skills.name)],
+    ['subagents', filterRows(r.subagents, STAT_DEFS.subagents.name)],
+  ];
+  const html = sets.map(([id, rows]) => statTable(id, STAT_DEFS[id], rows)).join('');
+  const empty = r.tools.length + r.skills.length + r.subagents.length === 0;
+  $('#stats-tables').innerHTML = html
+    || (empty ? '<div class="empty">No stats yet.</div>' : '<div class="empty">No rows match the filter.</div>');
+  const total = r.tools.length + r.skills.length + r.subagents.length;
+  const shown = sets.reduce((acc, [, rows]) => acc + rows.length, 0);
+  $('#stat-filter-meta').textContent = statsFilter ? `${shown} of ${total} rows` : '';
+}
+
+function onStatsHeaderClick(e) {
+  const th = e.target.closest('th.sortable');
+  if (!th) return;
+  const st = statsSort[th.dataset.table];
+  if (st.key === th.dataset.key) st.dir = -st.dir;
+  else { st.key = th.dataset.key; st.dir = th.dataset.type === 'text' ? 1 : -1; }
+  renderStatsTables();
 }
 
 function renderStats(r) {
-  const toolMax = Math.max(...r.tools.map(t => t.totalMs), 1);
-  const tools = r.tools.length ? `
-    <h2>Top tools</h2>
-    <table><tr><th>Tool</th><th class="num">Calls</th><th class="num">Total</th><th class="num">Avg</th><th class="num">Max</th><th>Started</th><th>Last active</th><th></th></tr>
-    ${r.tools.map(t => `<tr>
-      <td>${esc(t.name)}</td><td class="num">${num(t.count)}</td>
-      <td class="num">${sec(t.totalMs)}</td><td class="num">${sec(t.avgMs)}</td><td class="num">${sec(t.maxMs)}</td>
-      <td class="ts">${ts(t.firstAt)}</td><td class="ts">${ts(t.lastAt)}</td>
-      <td>${barCell(t.totalMs, toolMax)}</td></tr>`).join('')}
-    </table>` : '';
-
-  const skMax = Math.max(...r.skills.map(s => s.totalMs), 1);
-  const skills = r.skills.length ? `
-    <h2>Superpowers phases (skills)</h2>
-    <table><tr><th>Skill</th><th class="num">Runs</th><th class="num">Total</th><th class="num">Avg</th><th class="num">Credits</th><th class="num">Tokens</th><th>Started</th><th>Last active</th><th></th></tr>
-    ${r.skills.map(s => `<tr>
-      <td>${esc(s.skill)}</td><td class="num">${num(s.count)}</td>
-      <td class="num">${sec(s.totalMs)}</td><td class="num">${sec(s.avgMs)}</td>
-      <td class="num">${aiu(s.aiu)}</td><td class="num">${num(s.tokens)}</td>
-      <td class="ts">${ts(s.firstAt)}</td><td class="ts">${ts(s.lastAt)}</td>
-      <td>${barCell(s.totalMs, skMax)}</td></tr>`).join('')}
-    </table>` : '';
-
-  const subs = r.subagents.length ? `
-    <h2>Subagents</h2>
-    <table><tr><th>Agent</th><th class="num">Total</th><th class="num">Running</th><th class="num">Avg (reliable)</th><th>Started</th><th>Last active</th></tr>
-    ${r.subagents.map(a => `<tr>
-      <td>${esc(a.name)}</td><td class="num">${num(a.count)}</td><td class="num">${num(a.running)}</td>
-      <td class="num">${a.avgMs == null ? '—' : sec(a.avgMs)}</td>
-      <td class="ts">${ts(a.firstAt)}</td><td class="ts">${ts(a.lastAt)}</td></tr>`).join('')}
-    </table>` : '';
-
-  const body = tools + skills + subs;
-  $('#view-stats').innerHTML = body || '<div class="empty">No stats yet.</div>';
+  // Each subagent's share of total reliable subagent time (computed over the
+  // full set so the percentage stays absolute while filtering/sorting).
+  const grand = r.subagents.reduce((s, a) => s + Number(a.totalMs || 0), 0) || 1;
+  r.subagents.forEach((a) => { a.share = Number(a.totalMs || 0) / grand * 100; });
+  statsReport = r;
+  if (!$('#stat-filter')) {
+    $('#view-stats').innerHTML =
+      `<div class="filterbar">
+        <input id="stat-filter" type="search" placeholder="Filter tools, skills & subagents by name…" />
+        <span class="meta" id="stat-filter-meta"></span>
+      </div><div id="stats-tables"></div>`;
+    $('#stat-filter').addEventListener('input', () => {
+      statsFilter = $('#stat-filter').value.trim().toLowerCase();
+      renderStatsTables();
+    });
+    $('#stats-tables').addEventListener('click', onStatsHeaderClick);
+  }
+  renderStatsTables();
 }
 
 // Compute {from, to} millisecond bounds from the current timeline selection.

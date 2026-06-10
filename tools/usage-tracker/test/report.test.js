@@ -18,9 +18,9 @@ function seed() {
   db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES ('p2','s1:0','s1','feat-a','writing-plans','skill',2,3000,0.20,50,'closed')");
   db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES ('p3','s1:0','s2','feat-b','brainstorming','skill',1,2000,0.05,20,'closed')");
   // spans (tools)
-  db.run("INSERT INTO spans (span_id, phase_id, session_id, kind, name, duration_ms) VALUES ('x1','p1','s1','tool','grep',100)");
-  db.run("INSERT INTO spans (span_id, phase_id, session_id, kind, name, duration_ms) VALUES ('x2','p1','s1','tool','grep',300)");
-  db.run("INSERT INTO spans (span_id, phase_id, session_id, kind, name, duration_ms) VALUES ('x3','p2','s1','tool','view',50)");
+  db.run("INSERT INTO spans (span_id, phase_id, session_id, kind, name, duration_ms, success) VALUES ('x1','p1','s1','tool','grep',100,1)");
+  db.run("INSERT INTO spans (span_id, phase_id, session_id, kind, name, duration_ms, success) VALUES ('x2','p1','s1','tool','grep',300,0)");
+  db.run("INSERT INTO spans (span_id, phase_id, session_id, kind, name, duration_ms, success) VALUES ('x3','p2','s1','tool','view',50,1)");
   // subagents
   db.run("INSERT INTO subagents (subagent_id, session_id, agent_name, status, duration_ms, duration_reliable) VALUES ('a1','s1','explore','stopped',1500,1)");
   db.run("INSERT INTO subagents (subagent_id, session_id, agent_name, status, duration_ms, duration_reliable) VALUES ('a2','s1','explore','running',NULL,0)");
@@ -30,12 +30,16 @@ function seed() {
 test('buildReport totals', () => {
   const { db, path } = seed();
   try {
+    db.run("UPDATE phases SET cost_delta=0.02 WHERE phase_id='p1'");
+    db.run("UPDATE phases SET premium_delta=3 WHERE phase_id='p2'");
     const r = buildReport(db);
     assert.equal(r.totals.sessions, 2);
     assert.equal(r.totals.phases, 3);
     assert.equal(r.totals.durationMs, 10000);
     assert.equal(Math.round(r.totals.aiu * 100), 35); // 0.10+0.20+0.05
     assert.equal(r.totals.tokens, 170);
+    assert.equal(r.totals.premium, 3);
+    assert.equal(Math.round(r.totals.cost * 100), 2); // 0.02
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 
@@ -70,6 +74,10 @@ test('buildReport sessions: session -> skill with identity + credits + duration'
     assert.equal(s1.durationMs, 8000);                  // p1 (5000) + p2 (3000)
     assert.equal(Math.round(s1.aiu * 100), 30);         // 0.10 + 0.20
     assert.equal(s1.tokens, 150);                       // 100 + 50
+    assert.equal(s1.toolCount, 3);                      // grep×2 + view×1
+    assert.equal(s1.toolDurationMs, 450);               // 100 + 300 + 50
+    assert.equal(s1.subagentCount, 2);                  // explore stopped + running
+    assert.equal(s1.subagentRunning, 1);
     const s1skills = s1.skills.map((s) => s.skill).sort();
     assert.deepEqual(s1skills, ['brainstorming', 'writing-plans']);
 
@@ -88,8 +96,11 @@ test('buildReport tools aggregates count + durations', () => {
     const grep = r.tools.find((t) => t.name === 'grep');
     assert.equal(grep.count, 2);
     assert.equal(grep.totalMs, 400);
-    assert.equal(grep.avgMs, 200);
-    assert.equal(grep.maxMs, 300);
+    assert.equal(grep.p75Ms, 300);   // nearest-rank of [100,300]
+    assert.equal(grep.p95Ms, 300);
+    const view = r.tools.find((t) => t.name === 'view');
+    assert.equal(view.count, 1);
+    assert.equal(view.p75Ms, 50);    // single sample
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 
@@ -105,6 +116,8 @@ test('buildReport skills (phase analysis) + subagents', () => {
     assert.equal(explore.running, 1);
     assert.equal(explore.reliable, 1);
     assert.equal(explore.avgMs, 1500);            // reliable-only avg
+    assert.equal(explore.totalMs, 1500);          // reliable-only total
+    assert.equal(explore.maxMs, 1500);            // reliable-only max
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 

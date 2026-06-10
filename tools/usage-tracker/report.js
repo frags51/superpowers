@@ -51,6 +51,7 @@ export function buildReport(db, opts = {}) {
       (SELECT COALESCE(SUM(duration_ms),0) FROM phases${r.where('started_at')}) AS duration_ms,
       (SELECT COALESCE(SUM(aiu_delta),0)   FROM phases${r.where('started_at')}) AS aiu,
       (SELECT COALESCE(SUM(premium_delta),0) FROM phases${r.where('started_at')}) AS premium,
+      (SELECT COALESCE(SUM(cost_delta),0)  FROM phases${r.where('started_at')}) AS cost,
       (SELECT COALESCE(SUM(total_tokens),0) FROM phases${r.where('started_at')}) AS tokens`) || {};
 
   // --- Hierarchy: repo -> feature(branch) -> skill(phase) --------------------
@@ -133,26 +134,67 @@ export function buildReport(db, opts = {}) {
     se.aiu += n(row.aiu); se.durationMs += n(row.duration_ms); se.tokens += n(row.tokens);
     se.firstAt = minT(se.firstAt, first); se.lastAt = maxT(se.lastAt, last);
   }
-  const sessions = [...sessMap.values()].map((se) => ({
-    ...se, skills: se.skills.sort((a, z) => z.durationMs - a.durationMs),
-  })).sort((a, z) => (z.startedAt ?? z.firstAt ?? 0) - (a.startedAt ?? a.firstAt ?? 0));
+  // Per-session brief summaries of tool and subagent activity (for the session
+  // drilldown headline), keyed by session_id.
+  const toolBySess = new Map();
+  for (const row of db.all(`
+    SELECT session_id AS sid, COUNT(*) AS c, COALESCE(SUM(duration_ms), 0) AS dur
+    FROM spans WHERE kind='tool'${r.and('started_at')} GROUP BY session_id`)) {
+    toolBySess.set(row.sid, { count: n(row.c), durationMs: n(row.dur) });
+  }
+  const subBySess = new Map();
+  for (const row of db.all(`
+    SELECT session_id AS sid, COUNT(*) AS c,
+           SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) AS running
+    FROM subagents${r.where('started_at')} GROUP BY session_id`)) {
+    subBySess.set(row.sid, { count: n(row.c), running: n(row.running) });
+  }
+
+  const sessions = [...sessMap.values()].map((se) => {
+    const t = toolBySess.get(se.sessionId) || { count: 0, durationMs: 0 };
+    const sub = subBySess.get(se.sessionId) || { count: 0, running: 0 };
+    return {
+      ...se,
+      toolCount: t.count, toolDurationMs: t.durationMs,
+      subagentCount: sub.count, subagentRunning: sub.running,
+      skills: se.skills.sort((a, z) => z.durationMs - a.durationMs),
+    };
+  }).sort((a, z) => (z.startedAt ?? z.firstAt ?? 0) - (a.startedAt ?? a.firstAt ?? 0));
 
   // --- Top tools -------------------------------------------------------------
+  // Per-tool duration percentiles (P75/P95) are computed in JS from the sorted
+  // per-call durations — SQLite has no percentile aggregate. Durations arrive
+  // pre-sorted ascending per tool so nearest-rank indexing works directly.
+  const durByTool = new Map();
+  for (const row of db.all(`
+    SELECT name, duration_ms FROM spans
+    WHERE kind='tool' AND duration_ms IS NOT NULL${r.and('started_at')}
+    ORDER BY name, duration_ms`)) {
+    if (!durByTool.has(row.name)) durByTool.set(row.name, []);
+    durByTool.get(row.name).push(Number(row.duration_ms));
+  }
+  const pctl = (arr, p) => {
+    if (!arr || !arr.length) return null;
+    const idx = Math.min(arr.length - 1, Math.max(0, Math.ceil((p / 100) * arr.length) - 1));
+    return arr[idx];
+  };
   const tools = db.all(`
     SELECT name,
            COUNT(*) AS count,
            SUM(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END) AS timed,
            COALESCE(SUM(duration_ms), 0) AS total_ms,
-           COALESCE(AVG(duration_ms), 0) AS avg_ms,
-           COALESCE(MAX(duration_ms), 0) AS max_ms,
            MIN(started_at) AS first_at,
            MAX(started_at) AS last_at
     FROM spans WHERE kind='tool'${r.and('started_at')}
-    GROUP BY name ORDER BY count DESC`).map((t) => ({
-      name: t.name, count: n(t.count), timed: n(t.timed),
-      totalMs: n(t.total_ms), avgMs: Math.round(n(t.avg_ms)), maxMs: n(t.max_ms),
-      firstAt: ts(t.first_at), lastAt: ts(t.last_at),
-    }));
+    GROUP BY name ORDER BY count DESC`).map((t) => {
+      const d = durByTool.get(t.name) || [];
+      return {
+        name: t.name, count: n(t.count), timed: n(t.timed),
+        p75Ms: pctl(d, 75), p95Ms: pctl(d, 95),
+        totalMs: n(t.total_ms),
+        firstAt: ts(t.first_at), lastAt: ts(t.last_at),
+      };
+    });
 
   // --- Superpowers phase (skill) analysis ------------------------------------
   const skills = db.all(`
@@ -177,12 +219,15 @@ export function buildReport(db, opts = {}) {
            COUNT(*) AS count,
            SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) AS running,
            AVG(CASE WHEN duration_reliable=1 THEN duration_ms END) AS avg_ms,
+           COALESCE(SUM(CASE WHEN duration_reliable=1 THEN duration_ms ELSE 0 END), 0) AS total_ms,
+           COALESCE(MAX(CASE WHEN duration_reliable=1 THEN duration_ms END), 0) AS max_ms,
            SUM(CASE WHEN duration_reliable=1 THEN 1 ELSE 0 END) AS reliable,
            MIN(started_at) AS first_at,
            MAX(started_at) AS last_at
     FROM subagents${r.where('started_at')} GROUP BY agent_name ORDER BY count DESC`).map((a) => ({
       name: a.name, count: n(a.count), running: n(a.running),
       reliable: n(a.reliable), avgMs: a.avg_ms == null ? null : Math.round(n(a.avg_ms)),
+      totalMs: n(a.total_ms), maxMs: n(a.max_ms),
       firstAt: ts(a.first_at), lastAt: ts(a.last_at),
     }));
 
@@ -192,7 +237,7 @@ export function buildReport(db, opts = {}) {
     totals: {
       sessions: n(totals.sessions), tasks: n(totals.tasks), phases: n(totals.phases),
       subagents: n(totals.subagents), durationMs: n(totals.duration_ms),
-      aiu: n(totals.aiu), premium: n(totals.premium), tokens: n(totals.tokens),
+      aiu: n(totals.aiu), premium: n(totals.premium), cost: n(totals.cost), tokens: n(totals.tokens),
     },
     tree, tools, skills, subagents, sessions,
   };

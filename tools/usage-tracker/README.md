@@ -60,22 +60,34 @@ report straight from `usage.db`:
   (`datetime-local`), so you can filter to a precise moment, not just a whole
   day. The window is applied server-side via `from`/`to` (millisecond) query
   params on `/api/report`.
-- **Usage** — a collapsible infographic: **repo → branch → skill**, showing AI
-  credit usage, duration (in seconds), and the **start time** at each level. A
-  **"What do these labels mean?"** callout explains the tree's placeholders:
-  `(unknown repo)` / `(no branch)` (no git repo or branch detected), `(root)`
-  (work outside any skill — the implicit root phase), and `unknown` (a skill
-  activated whose name could not be resolved).
-- **Sessions** — the same phase data pivoted by **session → skill**: one
-  collapsible entry per agent run (newest first). Each session shows its
+The dashboard focuses on two metrics throughout — **AI credits (AIC**, shown
+floored to a whole number) and **duration** (adaptive `12.3s` / `M:SS` /
+`H:MM:SS`). The headline chips summarise **Sessions**, **Phases**, **Subagents**,
+**AI credits**, and **Total time**.
+
+- **Usage** — a collapsible infographic: **repo → branch → skill**, showing AIC
+  and duration with the **start time** at each level. A **"What do these labels
+  mean?"** callout explains the tree's placeholders: `(unknown repo)` /
+  `(no branch)` (no git repo or branch detected), `(root)` (work outside any
+  skill — the implicit root phase), and `unknown` (a skill activated whose name
+  could not be resolved).
+- **Sessions** — the same phase data pivoted by **session → skill**, **newest
+  first**: one collapsible entry per agent run. Each session shows its
   Copilot-generated **title** as the headline (sourced at read time from
   Copilot's own session store — see *Session titles* below), with the git
-  **repo / branch** and **model** alongside it, its `skill` phases underneath,
-  and AI credit usage, duration, and **start time** at each level. Sessions with
-  no title yet fall back to showing `repo / branch` as the headline.
-- **Stats** — top tools (calls + durations), superpowers **phase analysis** per
-  skill (runs, total/avg time, credits, tokens), and subagent activity — each
-  with **Started** / **Last active** timestamps.
+  **repo / branch** and **model** alongside it, AIC + duration, and a **brief
+  summary** of tool calls (count + time in tools) and subagents (count, with any
+  still running), then its `skill` phases underneath with AIC + duration each.
+  Sessions with no title yet fall back to showing `repo / branch`.
+- **Stats** — three overall tables for analysing usage by dimension. **Top
+  tools** focuses on tool-use latency: per-tool **count**, **P75** and **P95**
+  duration (the percentiles that matter for latency, computed nearest-rank), the
+  **Total (sum)** of duration, and **Last active**. **Phases (skills)** shows
+  runs, total/avg duration, and **AIC** per skill. **Subagents** shows total,
+  running, **total/avg/max reliable duration**, and each agent's **share** of
+  subagent time. Every column is **click-to-sort** (toggle asc/desc; e.g. rank
+  tools by P95 or subagents by Max duration), and a single **filter box** narrows
+  all three tables by name so you can isolate one tool, skill, or agent.
 
 When the plugin is installed, you can also just ask Copilot to "open my usage
 dashboard" — the **`viewing-usage-dashboard`** skill starts the server and opens
