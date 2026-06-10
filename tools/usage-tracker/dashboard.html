@@ -679,9 +679,9 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
 $('#refresh').addEventListener('click', load);
 $('#hide-root').addEventListener('change', () => {
   hideRoot = $('#hide-root').checked;
-  renderUsageBody();
-  renderSessionsBody();
-  renderTasksBody();
+  if ($('#usage-body'))    renderUsageBody();
+  if ($('#sessions-body')) renderSessionsBody();
+  if ($('#tasks-body'))    renderTasksBody();
 });
 
 const presetEl = $('#range-preset');
