@@ -406,3 +406,43 @@ test('buildReport: reconciliation skips sessions that already have usage_snapsho
     assert.equal(count.cnt, 1, 'no duplicate snapshot inserted');
   } finally { db.close(); rmSync(path, { force: true }); rmSync(base, { recursive: true, force: true }); }
 });
+
+// Sessions whose events.jsonl has no session.shutdown (killed/crashed) must get
+// a sentinel snapshot so the LEFT JOIN excludes them on future report builds —
+// events.jsonl is read at most once per session, ever.
+test('buildReport: sentinel written for ended sessions with no session.shutdown', () => {
+  const base = mkdtempSync(join(tmpdir(), 'sp-report-sentinel-'));
+  const sessId = 'killed-sess';
+  const sessDir = join(base, 'session-state', sessId);
+  mkdirSync(sessDir, { recursive: true });
+  const transcript = join(sessDir, 'events.jsonl');
+
+  // events.jsonl exists but has no session.shutdown (process was killed).
+  writeFileSync(transcript, JSON.stringify({ type: 'session.start', data: {} }) + '\n');
+
+  const path = join(tmpdir(), `sp-report-sentinel-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    const T0 = 5_000_000;
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at, ended_at) VALUES (?,?,?,?,?)",
+      [sessId, 'repo', 'main', T0, T0 + 3000]);
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES (?,?,?,?,?)",
+      [`${sessId}:0`, sessId, 'main', 0, T0]);
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      ['ph3', `${sessId}:0`, sessId, 'main', null, 'root', 0, 3000, 0.02, 0, 'closed']);
+
+    const resolveTranscript = (s) => join(base, 'session-state', s, 'events.jsonl');
+    buildReport(db, { resolveTranscript });
+
+    // A sentinel snapshot (aiu=0) must be written so the next run skips the file.
+    const sentinel = db.get('SELECT aiu FROM usage_snapshots WHERE session_id=?', [sessId]);
+    assert.ok(sentinel, 'sentinel snapshot must exist');
+    assert.equal(sentinel.aiu, 0, 'sentinel aiu must be 0');
+
+    // Second report build must NOT re-read the file (sentinel prevents it).
+    // We verify indirectly: the session count in usage_snapshots stays at 1.
+    buildReport(db, { resolveTranscript });
+    const count = db.get('SELECT COUNT(*) AS cnt FROM usage_snapshots WHERE session_id=?', [sessId]);
+    assert.equal(count.cnt, 1, 'sentinel must prevent duplicate reads on subsequent builds');
+  } finally { db.close(); rmSync(path, { force: true }); rmSync(base, { recursive: true, force: true }); }
+});

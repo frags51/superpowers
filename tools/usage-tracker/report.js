@@ -180,9 +180,15 @@ export function buildReport(db, opts = {}) {
   // invoked, leaving usage_snapshots empty and AIC showing as 0.
   //
   // A single LEFT JOIN finds exactly the sessions that need work (those with
-  // NO snapshot rows at all), avoiding N per-session lookups.  After the
-  // INSERT below each session has a snapshot, so the next report build
-  // excludes it from the join and never re-reads its events.jsonl.
+  // NO snapshot rows at all).  Only ended sessions are considered (ended_at IS
+  // NOT NULL) — running sessions may still receive real statusLine snapshots.
+  //
+  // On success: the real snapshot is inserted → excluded from the join forever.
+  // On failure (no session.shutdown event): a sentinel row (aiu=0) is inserted
+  //   so the session is also excluded from the join on future report builds.
+  //   The sentinel has no effect on liveAiuBySession (only set on success).
+  //
+  // Net result: each session.jsonl is read at most once, ever.
   //
   // opts.resolveTranscript(sessionId) → path; wired in main() below.
   const resolveTranscript = opts.resolveTranscript || null;
@@ -191,19 +197,27 @@ export function buildReport(db, opts = {}) {
       SELECT s.session_id, s.ended_at
       FROM sessions s
       LEFT JOIN usage_snapshots us ON s.session_id = us.session_id
-      WHERE us.session_id IS NULL`);
+      WHERE us.session_id IS NULL AND s.ended_at IS NOT NULL`);
     for (const { session_id: s, ended_at } of noSnapSessions) {
       const transcriptPath = resolveTranscript(s);
-      const capturedAt = ended_at != null ? Number(ended_at) : nowMs();
+      const capturedAt = Number(ended_at);
       const snap = readShutdownSnapshot(transcriptPath, s, capturedAt);
-      if (!snap) continue;
       try {
-        db.run(
-          'INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
-          [snap.session_id, snap.captured_at, snap.aiu, snap.premium_requests, snap.cost_total],
-        );
+        if (snap) {
+          db.run(
+            'INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
+            [snap.session_id, snap.captured_at, snap.aiu, snap.premium_requests, snap.cost_total],
+          );
+          liveAiuBySession.set(s, Math.max(0, Number(snap.aiu)));
+        } else {
+          // Sentinel: marks this session as permanently attempted so it is
+          // excluded from the LEFT JOIN on every subsequent report build.
+          db.run(
+            'INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES (?,?,0)',
+            [s, capturedAt],
+          );
+        }
       } catch { /* best-effort — never let a write failure break the report */ }
-      liveAiuBySession.set(s, Math.max(0, Number(snap.aiu)));
     }
   }
 
