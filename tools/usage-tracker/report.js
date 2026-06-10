@@ -9,7 +9,9 @@
 //   - totals: headline numbers
 //
 // Durations are milliseconds in the data; the UI formats them as seconds.
+import { join } from 'node:path';
 import { openDb, defaultDbPath, defaultSessionStorePath, loadSessionTitles, nowMs, isMainModule } from './db.js';
+import { readShutdownSnapshot } from './snapshot.js';
 
 const n = (v) => (v == null ? 0 : Number(v));
 const ts = (v) => (v == null ? null : Number(v));
@@ -173,6 +175,41 @@ export function buildReport(db, opts = {}) {
     liveAiuBySession.set(row.sid, Math.max(0, live));
   }
 
+  // Reconcile sessions that have no usage_snapshots yet — this covers
+  // --autopilot / --acp / -p sessions where the statusLine command is never
+  // invoked, leaving usage_snapshots empty and AIC showing as 0.
+  //
+  // For each known session not yet in liveAiuBySession we read the
+  // `session.shutdown` event from its events.jsonl (always written by the CLI
+  // at exit, regardless of mode).  When found:
+  //   1. The snapshot is persisted to usage_snapshots so the DB stays accurate
+  //      and future report runs skip the file read.
+  //   2. liveAiuBySession is updated so the rest of this build uses real AIC.
+  //
+  // opts.resolveTranscript(sessionId) → path; wired in main() below.
+  const resolveTranscript = opts.resolveTranscript || null;
+  if (resolveTranscript) {
+    const allSessions = db.all('SELECT session_id, ended_at FROM sessions');
+    for (const { session_id: s, ended_at } of allSessions) {
+      if (liveAiuBySession.has(s)) continue;
+      // Only reconcile if there are genuinely no snapshots (avoids re-reading files
+      // for sessions that simply had no activity in the current time window).
+      const hasAnySnap = db.get('SELECT 1 FROM usage_snapshots WHERE session_id=? LIMIT 1', [s]);
+      if (hasAnySnap) continue;
+      const transcriptPath = resolveTranscript(s);
+      const capturedAt = ended_at != null ? Number(ended_at) : nowMs();
+      const snap = readShutdownSnapshot(transcriptPath, s, capturedAt);
+      if (!snap) continue;
+      try {
+        db.run(
+          'INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
+          [snap.session_id, snap.captured_at, snap.aiu, snap.premium_requests, snap.cost_total],
+        );
+      } catch { /* best-effort — never let a write failure break the report */ }
+      liveAiuBySession.set(s, Math.max(0, Number(snap.aiu)));
+    }
+  }
+
   // Roll up child-session AIC into parent sessions so a parent that delegates
   // all work to subagents shows real credits instead of 0.  The child session's
   // AIC counter is session-scoped (starts at 0), so its live value is its full
@@ -298,8 +335,11 @@ function main() {
   const dbPath = process.argv[2] || defaultDbPath(process.env);
   const db = openDb(dbPath);
   const sessionTitles = loadSessionTitles(defaultSessionStorePath(process.env));
+  const env = process.env;
+  const copilotHome = env.COPILOT_HOME || join(env.HOME || env.USERPROFILE || '.', '.copilot');
+  const resolveTranscript = (s) => join(copilotHome, 'session-state', s, 'events.jsonl');
   try {
-    process.stdout.write(JSON.stringify(buildReport(db, { sessionTitles }), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(buildReport(db, { sessionTitles, resolveTranscript }), null, 2) + '\n');
   } finally {
     db.close();
   }

@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rmSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { rmSync, writeFileSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { openDb } from '../db.js';
 import { handle } from '../tracker.js';
+import { readShutdownSnapshot } from '../snapshot.js';
 
 function freshDb() {
   const path = join(tmpdir(), `sp-trk-${randomUUID()}.db`);
@@ -708,4 +709,45 @@ test('e2e: bash-spawned copilot auto-links child session to parent for AIC rollu
     assert.ok(Math.abs(parentPhase.aiu_delta - 5.05) < 0.01,
       `expected ~5.05 (0.05 own + 5.0 child) but got ${parentPhase.aiu_delta}`);
   } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+// --- readShutdownSnapshot ---
+
+test('readShutdownSnapshot: parses session.shutdown event from events.jsonl', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sp-shutdown-'));
+  const f = join(dir, 'events.jsonl');
+  try {
+    const shutdown = {
+      type: 'session.shutdown',
+      data: {
+        totalNanoAiu: 4072830000,
+        totalPremiumRequests: 0.33,
+        modelMetrics: {
+          'claude-haiku-4.5': { requests: { count: 2, cost: 0.042 }, usage: {} },
+        },
+      },
+    };
+    writeFileSync(f, JSON.stringify({ type: 'session.start', data: {} }) + '\n'
+      + JSON.stringify(shutdown) + '\n');
+
+    const snap = readShutdownSnapshot(f, 'sess-1', 9999);
+    assert.ok(snap, 'snap must not be null');
+    assert.equal(snap.session_id, 'sess-1');
+    assert.equal(snap.captured_at, 9999);
+    assert.ok(Math.abs(snap.aiu - 4.07283) < 0.0001, `aiu should be ~4.07 but got ${snap.aiu}`);
+    assert.equal(snap.premium_requests, 0.33);
+    assert.ok(Math.abs(snap.cost_total - 0.042) < 0.0001, `cost_total should be 0.042 but got ${snap.cost_total}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('readShutdownSnapshot: returns null when file missing', () => {
+  assert.equal(readShutdownSnapshot('/no/such/path.jsonl', 's', 100), null);
+});
+
+test('readShutdownSnapshot: returns null when no session.shutdown event', () => {
+  const f = join(tmpdir(), `sp-noshutdown-${randomUUID()}.jsonl`);
+  try {
+    writeFileSync(f, JSON.stringify({ type: 'session.start', data: {} }) + '\n');
+    assert.equal(readShutdownSnapshot(f, 's', 100), null);
+  } finally { rmSync(f, { force: true }); }
 });

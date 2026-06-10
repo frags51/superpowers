@@ -11,6 +11,61 @@
 import { readFileSync } from 'node:fs';
 import { openDb, defaultDbPath, nowMs, isMainModule } from './db.js';
 
+// Exact cumulative AIU from the statusObject's `ai_used`. The Copilot CLI v1.x
+// reports `total_nano_aiu` (AIU * 1e9); older builds exposed a raw `value`. The
+// `formatted` string is lossy (e.g. "<0.01", rounded values) and must never be
+// used as the numeric source, or per-phase deltas drift / go NaN.
+const NANO_PER_AIU = 1e9;
+
+// Read the session's events.jsonl and extract a usage snapshot from the
+// `session.shutdown` event that Copilot CLI always writes at session end —
+// including --autopilot / -p / --acp modes where the statusLine command is
+// never invoked (so usage_snapshots would otherwise stay empty).
+//
+// capturedAt defaults to now; callers can pass the session's ended_at timestamp
+// so the snapshot falls within the correct phase window for snapshotDelta.
+//
+// Returns null when the file is unreadable or has no session.shutdown event
+// (e.g. the process was killed before it could write the final event).
+export function readShutdownSnapshot(transcriptPath, sessionId, capturedAt = nowMs()) {
+  if (!transcriptPath) return null;
+  let raw;
+  try { raw = readFileSync(transcriptPath, 'utf8'); } catch { return null; }
+
+  // Scan lines in reverse — session.shutdown is always the final event.
+  const lines = raw.split('\n').filter(Boolean).reverse();
+  for (const line of lines) {
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (obj.type !== 'session.shutdown') continue;
+    const d = obj.data || {};
+    const nanoAiu = d.totalNanoAiu;
+    const aiu = nanoAiu != null && Number.isFinite(Number(nanoAiu))
+      ? Number(nanoAiu) / NANO_PER_AIU : null;
+    if (aiu == null) return null;
+
+    // Sum cost_total across all model entries (each has requests.cost).
+    let cost_total = null;
+    if (d.modelMetrics && typeof d.modelMetrics === 'object') {
+      let sum = 0;
+      for (const m of Object.values(d.modelMetrics)) {
+        const c = m?.requests?.cost;
+        if (c != null && Number.isFinite(Number(c))) sum += Number(c);
+      }
+      if (sum > 0) cost_total = sum;
+    }
+
+    return {
+      session_id: sessionId,
+      captured_at: capturedAt,
+      aiu,
+      premium_requests: d.totalPremiumRequests != null ? Number(d.totalPremiumRequests) : null,
+      cost_total,
+    };
+  }
+  return null;
+}
+
 // Build the brief status line shown in the Copilot CLI when the snapshot is
 // wired with `--debug`. Leads with the session's cumulative AI credits (the
 // exact value from `aiuFromStatus`, never the lossy `formatted` string) and
@@ -32,7 +87,6 @@ export function formatStatusLine(s) {
 // reports `total_nano_aiu` (AIU * 1e9); older builds exposed a raw `value`. The
 // `formatted` string is lossy (e.g. "<0.01", rounded values) and must never be
 // used as the numeric source, or per-phase deltas drift / go NaN.
-const NANO_PER_AIU = 1e9;
 export function aiuFromStatus(used) {
   if (!used) return null;
   if (used.total_nano_aiu != null && Number.isFinite(Number(used.total_nano_aiu))) {

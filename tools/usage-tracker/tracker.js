@@ -386,7 +386,7 @@ const HANDLERS = {
     );
   },
 
-  postToolUse(db, p) { closeSpan(db, p, 1); },
+  postToolUse(db, p, opts) { closeSpan(db, p, 1); },
   postToolUseFailure(db, p) { closeSpan(db, p, 0); },
 
   subagentStart(db, p, opts) {
@@ -404,7 +404,7 @@ const HANDLERS = {
     );
   },
 
-  subagentStop(db, p) {
+  subagentStop(db, p, opts) {
     const s = sid(p);
     const at = ts(p);
     const running = db.all(

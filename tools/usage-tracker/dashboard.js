@@ -49,7 +49,10 @@ function parseArgs(argv) {
 function report(dbPath, opts) {
   const db = openDb(dbPath);
   const sessionTitles = loadSessionTitles(defaultSessionStorePath(process.env));
-  try { return buildReport(db, { ...opts, sessionTitles }); } finally { db.close(); }
+  const env = process.env;
+  const copilotHome = env.COPILOT_HOME || join(env.HOME || env.USERPROFILE || '.', '.copilot');
+  const resolveTranscript = (s) => join(copilotHome, 'session-state', s, 'events.jsonl');
+  try { return buildReport(db, { ...opts, sessionTitles, resolveTranscript }); } finally { db.close(); }
 }
 
 function send(res, code, type, body) {

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rmSync } from 'node:fs';
+import { rmSync, writeFileSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { openDb } from '../db.js';
 import { buildReport } from '../report.js';
@@ -318,4 +318,91 @@ test('buildReport: child session AIC rolls up into parent, headline total not do
     assert.ok(Math.abs(r.totals.aiu - 8.05) < 0.01,
       `totals.aiu should be ~8.05 (no double-count) but got ${r.totals.aiu}`);
   } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+// Regression: --autopilot / --acp sessions never invoke statusLine, so
+// usage_snapshots stays empty and AIC shows 0.  buildReport must reconcile by
+// reading session.shutdown from events.jsonl and persisting the snapshot to
+// usage.db so future report runs are fast.
+test('buildReport: reconciles 0-AIC sessions from session.shutdown in events.jsonl', () => {
+  const base = mkdtempSync(join(tmpdir(), 'sp-report-recon-'));
+  const sessId = 'autopilot-sess';
+  const sessDir = join(base, 'session-state', sessId);
+  mkdirSync(sessDir, { recursive: true });
+  const transcript = join(sessDir, 'events.jsonl');
+
+  writeFileSync(transcript,
+    JSON.stringify({ type: 'session.start', data: {} }) + '\n'
+    + JSON.stringify({
+      type: 'session.shutdown',
+      data: {
+        totalNanoAiu: 4_072_830_000,
+        totalPremiumRequests: 2,
+        modelMetrics: { 'claude-haiku-4.5': { requests: { count: 3, cost: 0.12 }, usage: {} } },
+      },
+    }) + '\n');
+
+  const path = join(tmpdir(), `sp-report-recon-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    const T0 = 2_000_000;
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at, ended_at) VALUES (?,?,?,?,?)",
+      [sessId, 'repo', 'main', T0, T0 + 5000]);
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES (?,?,?,?,?)",
+      [`${sessId}:0`, sessId, 'main', 0, T0]);
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      ['ph1', `${sessId}:0`, sessId, 'main', null, 'root', 0, 5000, null, 0, 'closed']);
+
+    const resolveTranscript = (s) => join(base, 'session-state', s, 'events.jsonl');
+    const r = buildReport(db, { resolveTranscript });
+
+    const se = r.sessions.find((s) => s.sessionId === sessId);
+    assert.ok(se, 'session must appear in report');
+    assert.ok(Math.abs(se.aiu - 4.07283) < 0.001, `aiu should be ~4.07 but got ${se.aiu}`);
+
+    // Snapshot must have been persisted to usage.db for future runs.
+    const persisted = db.get('SELECT aiu, premium_requests FROM usage_snapshots WHERE session_id=?', [sessId]);
+    assert.ok(persisted, 'snapshot must be written back to usage.db');
+    assert.ok(Math.abs(persisted.aiu - 4.07283) < 0.001, `persisted aiu should be ~4.07 but got ${persisted.aiu}`);
+    assert.equal(persisted.premium_requests, 2);
+  } finally { db.close(); rmSync(path, { force: true }); rmSync(base, { recursive: true, force: true }); }
+});
+
+// Reconciliation must skip sessions that already have snapshots (no double-insert).
+test('buildReport: reconciliation skips sessions that already have usage_snapshots', () => {
+  const base = mkdtempSync(join(tmpdir(), 'sp-report-skip-'));
+  const sessId = 'has-snaps-sess';
+  const sessDir = join(base, 'session-state', sessId);
+  mkdirSync(sessDir, { recursive: true });
+  const transcript = join(sessDir, 'events.jsonl');
+
+  // events.jsonl claims 9 AIC — but a real snapshot (6 AIC) already exists.
+  writeFileSync(transcript,
+    JSON.stringify({ type: 'session.shutdown', data: { totalNanoAiu: 9_000_000_000 } }) + '\n');
+
+  const path = join(tmpdir(), `sp-report-skip-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    const T0 = 1_000_000;
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at, ended_at) VALUES (?,?,?,?,?)",
+      [sessId, 'repo', 'main', T0, T0 + 3000]);
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES (?,?,?,?,?)",
+      [`${sessId}:0`, sessId, 'main', 0, T0]);
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      ['ph2', `${sessId}:0`, sessId, 'main', null, 'root', 0, 3000, null, 0, 'closed']);
+
+    // Pre-existing snapshot (statusLine DID fire).
+    db.run('INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES (?,?,?)', [sessId, T0 + 2000, 6.0]);
+
+    const resolveTranscript = (s) => join(base, 'session-state', s, 'events.jsonl');
+    const r = buildReport(db, { resolveTranscript });
+
+    const se = r.sessions.find((s) => s.sessionId === sessId);
+    assert.ok(se, 'session must appear in report');
+    // Must use the existing snapshot (6.0), not the shutdown value (9.0).
+    assert.ok(Math.abs(se.aiu - 6.0) < 0.001, `aiu should be 6.0 (from existing snap) but got ${se.aiu}`);
+
+    const count = db.get('SELECT COUNT(*) AS cnt FROM usage_snapshots WHERE session_id=?', [sessId]);
+    assert.equal(count.cnt, 1, 'no duplicate snapshot inserted');
+  } finally { db.close(); rmSync(path, { force: true }); rmSync(base, { recursive: true, force: true }); }
 });
