@@ -303,6 +303,35 @@ const HANDLERS = {
         [s, transcript],
       );
     }
+    // Auto-link for bash-spawned Copilot CLI (scenario 2): if there is exactly
+    // one open bash span tagged 'copilot-cli' in another session that started
+    // before this sessionStart, synthesize a subagent record so finalizePhaseUsage
+    // can roll up the child's usage into the parent's phase delta.  We require
+    // exactly one candidate to avoid mis-attribution when multiple parent sessions
+    // are running concurrently.  This is safe to call even for sessions that
+    // already registered a proper subagent link via transcript path — the INSERT
+    // is guarded by `child_session_id IS NULL` on the existing row so it never
+    // double-links.
+    const bashCandidates = db.all(
+      "SELECT * FROM spans WHERE name='bash' AND detail='copilot-cli' AND ended_at IS NULL AND session_id != ? AND started_at <= ?",
+      [s, at],
+    );
+    if (bashCandidates.length === 1) {
+      const sp = bashCandidates[0];
+      // Only create the synthetic subagent if this span isn't already linked to
+      // a child session (handles the case where the same bash invocation fires
+      // two sessionStart events, e.g. re-init after a restart).
+      const alreadyLinked = db.get(
+        'SELECT subagent_id FROM subagents WHERE session_id=? AND started_at=? AND child_session_id IS NOT NULL',
+        [sp.session_id, sp.started_at],
+      );
+      if (!alreadyLinked) {
+        db.run(
+          "INSERT INTO subagents (subagent_id, session_id, task_id, phase_id, agent_name, description, child_session_id, started_at, status) VALUES (?,?,?,?, 'copilot-bash', 'auto-linked from bash invocation', ?,?, 'running')",
+          [genId(), sp.session_id, sp.task_id, sp.phase_id, s, sp.started_at],
+        );
+      }
+    }
   },
 
   userPromptSubmitted(db, p, opts) {
@@ -337,6 +366,19 @@ const HANDLERS = {
       detail = [a, d].filter(Boolean).join(': ') || null;
     } else if (toolName === 'skill') {
       detail = input.skill || null;
+    } else if (toolName === 'bash') {
+      // Tag bash spans that invoke the Copilot CLI binary so sessionStart can
+      // auto-link the resulting child session to this parent (scenario 2: copilot
+      // launched via bash rather than the task tool).
+      // Match `copilot` only when it is the executable being invoked: at the
+      // start of the command (or after && || ; ( \n), optionally preceded by a
+      // path prefix like `./` or `/usr/bin/`.  This avoids matching the word
+      // "copilot" in comments, arguments, or package names like
+      // `@github/copilot-language-server`.
+      const cmd = input.command || '';
+      if (/(?:^|[;&|(\n])\s*(?:[^\s;|&()\n]*[/\\])?copilot(?:\s|--|$)/.test(cmd)) {
+        detail = 'copilot-cli';
+      }
     }
     db.run(
       "INSERT INTO spans (span_id, phase_id, task_id, session_id, kind, name, detail, tool_call_id, started_at, match_key) VALUES (?,?,?,?, 'tool', ?,?,?,?,?)",

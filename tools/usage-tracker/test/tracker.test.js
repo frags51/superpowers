@@ -628,3 +628,84 @@ test('e2e: parent phase aiu_delta includes child session snapshots (0 AIC bug)',
     rmSync(path, { force: true });
   }
 });
+
+// Scenario 2: copilot launched via bash tool.
+// When the parent runs `copilot ...` via the bash tool, no subagentStart fires.
+// The bash span must be tagged detail='copilot-cli' and, when the child session
+// registers, a synthetic subagent record must be created so the AIC rolls up.
+test('bash command invoking copilot tags span detail=copilot-cli', () => {
+  const { db, path } = freshDb();
+  try {
+    const s = 'bash-tag';
+    handle('sessionStart', { sessionId: s, timestamp: 0, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: s, timestamp: 10, cwd: '/x', prompt: 'p' }, db, opts());
+    handle('preToolUse', { sessionId: s, timestamp: 100, toolName: 'bash', toolArgs: { command: 'copilot --acp --model claude-sonnet' } }, db, opts());
+    const span = db.get("SELECT detail FROM spans WHERE session_id=? AND name='bash'", [s]);
+    assert.equal(span.detail, 'copilot-cli', 'bash span invoking copilot must be tagged copilot-cli');
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+test('bash copilot tag: non-copilot commands are not tagged', () => {
+  const { db, path } = freshDb();
+  try {
+    const s = 'bash-no-tag';
+    handle('sessionStart', { sessionId: s, timestamp: 0, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: s, timestamp: 10, cwd: '/x', prompt: 'p' }, db, opts());
+    handle('preToolUse', { sessionId: s, timestamp: 100, toolName: 'bash', toolArgs: { command: 'echo "github copilot is great"' } }, db, opts());
+    handle('preToolUse', { sessionId: s, timestamp: 110, toolName: 'bash', toolArgs: { command: 'npm install @github/copilot-language-server' } }, db, opts());
+    const spans = db.all("SELECT detail FROM spans WHERE session_id=? AND name='bash'", [s]);
+    assert.ok(spans.every((sp) => sp.detail !== 'copilot-cli'), 'non-copilot bash must not be tagged');
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+test('e2e: bash-spawned copilot auto-links child session to parent for AIC rollup', () => {
+  const { db, path } = freshDb();
+  try {
+    const parent = 'bash-parent';
+    const child = 'bash-child';
+
+    // Parent fires preToolUse for a bash command that invokes copilot.
+    handle('sessionStart', { sessionId: parent, timestamp: 1000, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: parent, timestamp: 1100, cwd: '/x', prompt: 'Run copilot' }, db, opts());
+    handle('preToolUse', {
+      sessionId: parent, timestamp: 1200, toolName: 'bash',
+      toolArgs: { command: 'copilot --acp --model claude-opus' },
+    }, db, opts());
+
+    // Verify the bash span is tagged.
+    const bashSpan = db.get("SELECT * FROM spans WHERE session_id=? AND name='bash'", [parent]);
+    assert.equal(bashSpan.detail, 'copilot-cli');
+
+    // Parent does a tiny bit of its own work.
+    db.run('INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
+      [parent, 1150, 0.05, 0, 0.00]);
+
+    // Child Copilot CLI starts (inherits env, creates own session) — one open
+    // copilot-cli bash span exists, so auto-link fires.
+    handle('sessionStart', { sessionId: child, timestamp: 1210, cwd: '/x' }, db, opts());
+
+    // A synthetic subagent must be created linking parent -> child.
+    const sub = db.get("SELECT * FROM subagents WHERE session_id=? AND child_session_id=?", [parent, child]);
+    assert.ok(sub, 'synthetic subagent must be created linking parent to bash-spawned child');
+    assert.equal(sub.agent_name, 'copilot-bash');
+    assert.equal(sub.child_session_id, child);
+
+    // Child does real work.
+    handle('userPromptSubmitted', { sessionId: child, timestamp: 1220, cwd: '/x', prompt: '...' }, db, opts());
+    db.run('INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
+      [child, 1500, 5.0, 6, 0.50]);
+    handle('sessionEnd', { sessionId: child, timestamp: 1600, cwd: '/x' }, db, opts());
+
+    // Bash span closes, parent ends.
+    handle('postToolUse', { sessionId: parent, timestamp: 1610, toolName: 'bash', toolArgs: { command: 'copilot --acp --model claude-opus' } }, db, opts());
+    handle('sessionEnd', { sessionId: parent, timestamp: 1800, cwd: '/x' }, db, opts());
+
+    // Parent's root phase must include child's 5.0 AIC.
+    const parentPhase = db.get("SELECT * FROM phases WHERE session_id=? AND kind='root'", [parent]);
+    assert.equal(parentPhase.status, 'closed');
+    assert.ok(parentPhase.aiu_delta > 1.0,
+      `parent aiu_delta should include child usage but got ${parentPhase.aiu_delta}`);
+    assert.ok(Math.abs(parentPhase.aiu_delta - 5.05) < 0.01,
+      `expected ~5.05 (0.05 own + 5.0 child) but got ${parentPhase.aiu_delta}`);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
