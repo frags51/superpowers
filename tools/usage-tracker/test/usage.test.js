@@ -25,6 +25,26 @@ test('snapshotDelta returns nulls when no snapshots in range', () => {
   assert.equal(d.cost_delta, null);
 });
 
+test('snapshotDelta attributes the first phase from the session zero-origin', () => {
+  // A fresh session: counters start at 0, the first snapshot lands mid-phase.
+  // The phase starts before any snapshot, so the baseline is the 0 origin and
+  // the usage is recovered (previously this returned null -> displayed 0 AIC).
+  const rows = [{ captured_at: 200, aiu: 35, premium_requests: 5, cost_total: 1.0 }];
+  const d = snapshotDelta(rows, 100, 250);
+  assert.equal(d.aiu_delta, 35);
+  assert.equal(d.premium_delta, 5);
+  assert.equal(d.cost_delta, 1.0);
+});
+
+test('snapshotDelta is null when the phase closed before any snapshot', () => {
+  // No snapshot at/before the phase end => genuinely underivable, stays null.
+  const rows = [{ captured_at: 500, aiu: 35, premium_requests: 5, cost_total: 1.0 }];
+  const d = snapshotDelta(rows, 100, 250);
+  assert.equal(d.aiu_delta, null);
+  assert.equal(d.premium_delta, null);
+  assert.equal(d.cost_delta, null);
+});
+
 test('sumOutputTokens sums assistant.message outputTokens in window', () => {
   const path = join(tmpdir(), `sp-tx-${randomUUID()}.jsonl`);
   const lines = [

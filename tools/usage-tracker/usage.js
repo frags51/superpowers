@@ -28,8 +28,15 @@ export function toolMatchKey(toolName, args) {
 }
 
 // rows: usage_snapshots ordered by captured_at ASC (any order accepted).
-// Returns deltas between the last snapshot at/before startMs (baseline)
-// and the last snapshot at/before endMs (end). Null when not derivable.
+// Returns the usage consumed during [startMs, endMs]. The CLI's cumulative
+// counters (aiu / premium / cost) are SESSION-scoped — they start at 0 when the
+// session begins — so usage at a time t is the last snapshot at/before t, or 0
+// before the first snapshot. A phase therefore measures end - base where:
+//   - end  = last snapshot at/before endMs (null only if the phase closed before
+//            ANY snapshot was captured for the session — genuinely underivable)
+//   - base = last snapshot at/before startMs, or the session's 0 origin when the
+//            phase began before the first snapshot (so the first phase's usage is
+//            attributed instead of being dropped).
 export function snapshotDelta(rows, startMs, endMs) {
   const sorted = [...rows].sort((a, b) => a.captured_at - b.captured_at);
   const atOrBefore = (t) => {
@@ -40,11 +47,13 @@ export function snapshotDelta(rows, startMs, endMs) {
     }
     return found;
   };
-  const base = atOrBefore(startMs);
   const end = atOrBefore(endMs);
-  if (!base || !end || end.captured_at < (base.captured_at ?? 0)) {
+  if (!end) {
     return { aiu_delta: null, premium_delta: null, cost_delta: null };
   }
+  // No snapshot before the phase started => it began at the session's zero
+  // origin (counters start at 0), so use 0 as the baseline.
+  const base = atOrBefore(startMs) || { aiu: 0, premium_requests: 0, cost_total: 0 };
   const sub = (a, b) => (a == null || b == null ? null : a - b);
   return {
     aiu_delta: sub(end.aiu, base.aiu),
