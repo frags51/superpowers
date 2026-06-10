@@ -340,7 +340,7 @@ export function buildReport(db, opts = {}) {
            COALESCE(t.session_id, p.session_id)      AS session_id,
            COALESCE(s.repo, '(unknown repo)')         AS repo,
            COALESCE(s.branch, '(no branch)')          AS branch,
-           COALESCE(t.feature, '(no branch)')         AS feature,
+           COALESCE(t.feature, '(unknown)')            AS feature,
            t.label                                    AS label,
            t.turn_index                               AS turn_index,
            t.prompt_excerpt                           AS prompt_excerpt,
