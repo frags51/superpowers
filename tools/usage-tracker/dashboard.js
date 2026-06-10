@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { platform } from 'node:os';
-import { openDb, defaultDbPath, isMainModule } from './db.js';
+import { openDb, defaultDbPath, defaultSessionStorePath, loadSessionTitles, isMainModule } from './db.js';
 import { buildReport } from './report.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -48,7 +48,8 @@ function parseArgs(argv) {
 
 function report(dbPath, opts) {
   const db = openDb(dbPath);
-  try { return buildReport(db, opts); } finally { db.close(); }
+  const sessionTitles = loadSessionTitles(defaultSessionStorePath(process.env));
+  try { return buildReport(db, { ...opts, sessionTitles }); } finally { db.close(); }
 }
 
 function send(res, code, type, body) {

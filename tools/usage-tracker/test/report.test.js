@@ -211,3 +211,22 @@ test('buildReport exposes first/last start timestamps', () => {
     assert.equal(explore.lastAt, T0 + HOUR);
   } finally { db.close(); rmSync(path, { force: true }); }
 });
+
+test('buildReport attaches session titles from opts.sessionTitles', () => {
+  const { db, path } = seed();
+  try {
+    const r = buildReport(db, { sessionTitles: { s1: 'Wire the credit snapshotter' } });
+    const s1 = r.sessions.find((s) => s.sessionId === 's1');
+    const s2 = r.sessions.find((s) => s.sessionId === 's2');
+    assert.equal(s1.title, 'Wire the credit snapshotter');
+    assert.equal(s2.title, null); // no title provided -> null, not undefined
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+test('buildReport leaves title null when no titles are supplied', () => {
+  const { db, path } = seed();
+  try {
+    const r = buildReport(db);
+    for (const s of r.sessions) assert.equal(s.title, null);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});

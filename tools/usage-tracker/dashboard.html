@@ -224,9 +224,11 @@ function renderSessions(sessions) {
         ${nums(s.aiu, s.durationMs)}
       </div>`).join('');
     const model = se.model ? ` <span class="meta">· ${esc(se.model)}</span>` : '';
+    const headline = se.title ? esc(se.title) : `${esc(se.repo)} / ${esc(se.branch)}`;
+    const where = se.title ? ` <span class="meta">· ${esc(se.repo)} / ${esc(se.branch)}</span>` : '';
     return `<details open>
       <summary>
-        <span class="name grow">🧵 ${esc(se.repo)} / ${esc(se.branch)}${model}
+        <span class="name grow">🧵 ${headline}${where}${model}
           <span class="ts">· started ${ts(se.startedAt ?? se.firstAt)}</span></span>
         <span class="bar"><i style="width:${pct(se.durationMs, seMax)}%"></i></span>
         ${nums(se.aiu, se.durationMs)}

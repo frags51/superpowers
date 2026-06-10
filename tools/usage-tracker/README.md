@@ -67,9 +67,12 @@ report straight from `usage.db`:
   (work outside any skill — the implicit root phase), and `unknown` (a skill
   activated whose name could not be resolved).
 - **Sessions** — the same phase data pivoted by **session → skill**: one
-  collapsible entry per agent run (newest first), showing the session's git
-  **repo / branch** and **model**, with its `skill` phases underneath and AI
-  credit usage, duration, and **start time** at each level.
+  collapsible entry per agent run (newest first). Each session shows its
+  Copilot-generated **title** as the headline (sourced at read time from
+  Copilot's own session store — see *Session titles* below), with the git
+  **repo / branch** and **model** alongside it, its `skill` phases underneath,
+  and AI credit usage, duration, and **start time** at each level. Sessions with
+  no title yet fall back to showing `repo / branch` as the headline.
 - **Stats** — top tools (calls + durations), superpowers **phase analysis** per
   skill (runs, total/avg time, credits, tokens), and subagent activity — each
   with **Started** / **Last active** timestamps.
@@ -89,6 +92,22 @@ No hook carries token/credit data, so:
 - **Tokens**: summed from the session transcript (`events.jsonl`). The local
   transcript exposes **output** tokens only, so `input_tokens` is reserved
   (NULL) locally; `output_tokens`/`total_tokens` are populated.
+
+### Session titles (read-time enrichment)
+
+The hooks never see a session title, so the dashboard/report enriches sessions
+**at read time** from Copilot CLI's own session store — a separate SQLite file
+at `$COPILOT_HOME/session-store.db` (default `~/.copilot/session-store.db` on
+macOS/Linux, `%USERPROFILE%\.copilot\session-store.db` on Windows; the same
+relative path on every platform). Its `sessions` table carries a
+Copilot-generated `summary` (e.g. *"Align Windows and Mac Setup Scripts"*) which
+becomes the session's **title**, joined by `session_id`.
+
+This read is **optional and fail-open**: it never touches the hot hook path,
+opens the store **read-only**, and on any failure (missing file, locked DB,
+schema drift across CLI versions, no sqlite backend) it simply yields no titles
+— the Sessions page then falls back to `repo / branch`. Because the `summary` is
+generated asynchronously by the CLI, very new sessions may not have a title yet.
 
 ## Install
 
@@ -174,7 +193,7 @@ irm https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-track
 
 Re-run the **same** command any time to update — it detects an existing install
 and runs `copilot plugin update` instead of `install`. It assumes the Copilot
-CLI (`copilot`, or `agency copilot` if present) and `node` are on PATH. Restart Copilot CLI afterward. What it does:
+CLI (`copilot`) and `node` are on PATH. Restart Copilot CLI afterward. What it does:
 
 1. `copilot plugin marketplace add frags51/superpowers` (idempotent).
 2. `copilot plugin install superpowers@superpowers-dev` — or `update` if the
@@ -193,7 +212,8 @@ irm https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-track
 ```
 
 From a local checkout you can run the scripts directly (they honor `COPILOT_HOME`,
-default `%USERPROFILE%\.copilot`):
+default `%USERPROFILE%\.copilot`, and `SUPERPOWERS_USAGE_NO_SNAPSHOT=1` to install
+the plugin only and skip wiring the credit `statusLine`):
 
     powershell -File setup.ps1
     powershell -File uninstall.ps1

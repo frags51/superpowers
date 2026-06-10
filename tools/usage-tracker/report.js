@@ -9,7 +9,7 @@
 //   - totals: headline numbers
 //
 // Durations are milliseconds in the data; the UI formats them as seconds.
-import { openDb, defaultDbPath, nowMs, isMainModule } from './db.js';
+import { openDb, defaultDbPath, defaultSessionStorePath, loadSessionTitles, nowMs, isMainModule } from './db.js';
 
 const n = (v) => (v == null ? 0 : Number(v));
 const ts = (v) => (v == null ? null : Number(v));
@@ -38,6 +38,9 @@ function rangeClauses(opts = {}) {
 
 export function buildReport(db, opts = {}) {
   const r = rangeClauses(opts);
+  // Read-time session "title" enrichment (Copilot's own session summaries),
+  // injected by callers; absent/empty by default so the core report stays pure.
+  const titles = opts.sessionTitles || {};
 
   const totals = db.get(`
     SELECT
@@ -118,7 +121,8 @@ export function buildReport(db, opts = {}) {
     let se = sessMap.get(row.session_id);
     if (!se) {
       se = {
-        sessionId: row.session_id, repo: row.repo, branch: row.branch, model: row.model,
+        sessionId: row.session_id, title: titles[row.session_id] ?? null,
+        repo: row.repo, branch: row.branch, model: row.model,
         startedAt: ts(row.session_started), endedAt: ts(row.session_ended), endReason: row.end_reason,
         aiu: 0, durationMs: 0, tokens: 0, firstAt: null, lastAt: null, skills: [],
       };
@@ -197,8 +201,9 @@ export function buildReport(db, opts = {}) {
 function main() {
   const dbPath = process.argv[2] || defaultDbPath(process.env);
   const db = openDb(dbPath);
+  const sessionTitles = loadSessionTitles(defaultSessionStorePath(process.env));
   try {
-    process.stdout.write(JSON.stringify(buildReport(db), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(buildReport(db, { sessionTitles }), null, 2) + '\n');
   } finally {
     db.close();
   }

@@ -98,6 +98,42 @@ export function defaultDbPath(env = process.env) {
   return join(home, 'plugin-data', 'superpowers-usage', 'usage.db');
 }
 
+// Path to Copilot CLI's own session store (sibling of the config dir on every
+// platform: `%USERPROFILE%\.copilot\session-store.db` on Windows,
+// `~/.copilot/session-store.db` on macOS/Linux; `COPILOT_HOME` overrides).
+export function defaultSessionStorePath(env = process.env) {
+  const home = env.COPILOT_HOME || join(env.HOME || env.USERPROFILE || '.', '.copilot');
+  return join(home, 'session-store.db');
+}
+
+// Read read-time enrichment from Copilot's own session store: a map of
+// session id -> human-readable `summary` (the session "title" Copilot
+// generates). This is an undocumented, version-drifting internal schema and the
+// live DB is held open by the CLI, so every failure path (missing file, locked
+// DB, renamed table/column, no sqlite backend) is swallowed and yields `{}` —
+// titles are a nice-to-have, never a hard dependency.
+export function loadSessionTitles(path) {
+  if (!path) return {};
+  const sql = "SELECT id, summary FROM sessions WHERE summary IS NOT NULL AND summary != ''";
+  try {
+    const sqlite = loadNodeSqlite();
+    let rows;
+    if (sqlite) {
+      const { DatabaseSync } = requireCjs('node:sqlite');
+      const db = new DatabaseSync(path, { readOnly: true });
+      try { rows = db.prepare(sql).all(); } finally { try { db.close(); } catch { /* ignore */ } }
+    } else {
+      const out = execFileSync('sqlite3', ['-readonly', '-json', path, sql], { encoding: 'utf8' }).trim();
+      rows = out ? JSON.parse(out) : [];
+    }
+    const map = {};
+    for (const row of rows) if (row && row.id && row.summary) map[row.id] = row.summary;
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 function git(cwd, args) {
   try {
     return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
