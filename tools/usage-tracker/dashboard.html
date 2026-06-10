@@ -99,6 +99,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="usage">Usage</div>
     <div class="tab" data-tab="sessions">Sessions</div>
+    <div class="tab" data-tab="tasks">Tasks</div>
     <div class="tab" data-tab="stats">Stats</div>
   </div>
   <div class="spacer"></div>
@@ -125,6 +126,7 @@
   <div class="chips" id="chips"></div>
   <section id="view-usage"></section>
   <section id="view-sessions" class="hidden"></section>
+  <section id="view-tasks" class="hidden"></section>
   <section id="view-stats" class="hidden"></section>
 </main>
 
@@ -162,6 +164,9 @@ let usagePage = 1;
 let selectedRepos = null;      // Set of repo names to show, or null = show all
 let sessionsData = [];
 let sessionsPage = 1;
+let tasksData = [];
+let tasksPage = 1;
+let hideRoot = false;
 
 function pageCount(total) { return Math.max(1, Math.ceil(total / PAGE_SIZE)); }
 
@@ -368,6 +373,68 @@ function sessionItem(se, seMax) {
       <span class="bar"><i style="width:${pct(se.durationMs, seMax)}%"></i></span>
       ${nums(se.aiu, se.durationMs)}
     </summary>${summary}${skills}</details>`;
+}
+
+function tasksLegend() {
+  return `<details class="callout">
+    <summary>What does this view show?</summary>
+    <p>One entry per <b>🎯 task</b> (a single user prompt turn), newest first. Each task shows
+      the git <b>branch</b> it was attributed to (the worktree branch if the agent wrote into one),
+      the <b>prompt excerpt</b> (if recorded), and the <code>skill</code> phases used — with AI
+      credit usage and duration at each level.</p>
+    <dl>
+      <dt><code>(root)</code></dt>
+      <dd>Work in a task <i>outside</i> any superpowers skill — the implicit root phase.</dd>
+      <dt>Prompt excerpt</dt>
+      <dd>First ~120 characters of the user prompt. Blank if <code>SUPERPOWERS_USAGE_NO_PROMPT=1</code>.</dd>
+    </dl>
+  </details>`;
+}
+
+function taskItem(tk, tkMax) {
+  const skMax = Math.max(...tk.skills.map(s => s.durationMs), 1);
+  const visSkills = hideRoot ? tk.skills.filter(s => s.skill !== '(root)') : tk.skills;
+  const skills = visSkills.map((s) => `
+    <div class="skill-row">
+      <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
+        <span class="ts">· started ${ts(s.firstAt)}</span></span>
+      <span class="bar"><i style="width:${pct(s.durationMs, skMax)}%"></i></span>
+      ${nums(s.aiu, s.durationMs)}
+    </div>`).join('');
+  const excerpt = tk.promptExcerpt
+    ? `<div class="skill-row"><span class="meta grow">💬 ${esc(tk.promptExcerpt)}</span></div>`
+    : '';
+  const headline = `🎯 ${esc(tk.feature)} / turn ${num(tk.turnIndex)}`;
+  const where = tk.repo ? ` <span class="meta">· ${esc(tk.repo)}</span>` : '';
+  return `<details open>
+    <summary>
+      <span class="name grow">${headline}${where}
+        <span class="ts">· started ${ts(tk.startedAt ?? tk.firstAt)}</span></span>
+      <span class="bar"><i style="width:${pct(tk.durationMs, tkMax)}%"></i></span>
+      ${nums(tk.aiu, tk.durationMs)}
+    </summary>${excerpt}${skills}</details>`;
+}
+
+function renderTasks(tasks) {
+  tasksData = tasks;
+  tasksPage = 1;
+  if (!tasksData.length) {
+    $('#view-tasks').innerHTML = tasksLegend() + '<div class="empty">No tasks recorded yet.</div>';
+    return;
+  }
+  $('#view-tasks').innerHTML = tasksLegend() + '<div id="tasks-body"></div>';
+  renderTasksBody();
+}
+
+function renderTasksBody() {
+  const total = tasksData.length;
+  if (tasksPage > pageCount(total)) tasksPage = pageCount(total);
+  const start = (tasksPage - 1) * PAGE_SIZE;
+  const items = tasksData.slice(start, start + PAGE_SIZE);
+  const tkMax = Math.max(...items.map(t => t.durationMs), 1);
+  const controls = pager('tasks', total, tasksPage, 'tasks');
+  $('#tasks-body').innerHTML = controls + items.map(t => taskItem(t, tkMax)).join('') + controls;
+  wirePager('tasks', (dir) => { tasksPage += dir === 'next' ? 1 : -1; renderTasksBody(); });
 }
 
 function renderSessions(sessions) {
@@ -583,6 +650,7 @@ async function load() {
     chips(r.totals);
     renderUsage(r.tree);
     renderSessions(r.sessions);
+    renderTasks(r.tasks || []);
     renderStats(r);
     const when = new Date(r.generatedAt).toLocaleTimeString();
     $('#meta').textContent = `${r.dbPath || ''} · ${rangeLabel(range)} · updated ${when}`;
@@ -598,6 +666,7 @@ function setTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   $('#view-usage').classList.toggle('hidden', name !== 'usage');
   $('#view-sessions').classList.toggle('hidden', name !== 'sessions');
+  $('#view-tasks').classList.toggle('hidden', name !== 'tasks');
   $('#view-stats').classList.toggle('hidden', name !== 'stats');
 }
 
