@@ -280,3 +280,42 @@ test('buildReport leaves title null when no titles are supplied', () => {
     for (const s of r.sessions) assert.equal(s.title, null);
   } finally { db.close(); rmSync(path, { force: true }); }
 });
+
+// Regression: parent session shows 0 AIC while the subagent's real usage lands
+// in a separate child session.  buildReport must roll child live AIC into the
+// parent and exclude child sessions from the headline total to avoid double-counting.
+test('buildReport: child session AIC rolls up into parent, headline total not double-counted', () => {
+  const path = join(tmpdir(), `sp-report-child-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    // Parent session with a single phase (no own snapshots -> would show 0 AIC).
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at) VALUES ('par','repo','main',1000)");
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES ('par:0','par','main',0,1000)");
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES ('pp','par:0','par','main',null,'root',0,5000,0.05,0,'closed')");
+
+    // Child session registered as a subagent of the parent with child_session_id set.
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at) VALUES ('chi','repo','main',1200)");
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES ('chi:0','chi','main',0,1200)");
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES ('cp','chi:0','chi','main',null,'root',0,3000,0.0,0,'closed')");
+    db.run("INSERT INTO subagents (subagent_id, session_id, phase_id, agent_name, child_session_id, started_at, status) VALUES ('sa1','par','pp','general-purpose','chi',1200,'stopped')");
+
+    // Child has real usage snapshots; parent has none.
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES ('chi', 1400, 4.0, 5, 0.40)");
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES ('chi', 1600, 8.0, 9, 0.80)");
+
+    const r = buildReport(db);
+    const byId = Object.fromEntries(r.sessions.map((s) => [s.sessionId, s]));
+
+    // Parent must show child's live AIC (8.0) added to its own phase delta (0.05) -> 8.05.
+    assert.ok(Math.abs(byId['par'].aiu - 8.05) < 0.01,
+      `parent aiu should be 8.05 (0.05 own + 8.0 child) but got ${byId['par'].aiu}`);
+    assert.equal(byId['par'].parentSessionId, null, 'parent has no parentSessionId');
+
+    // Child must carry parentSessionId so the UI can dim/indent it.
+    assert.equal(byId['chi'].parentSessionId, 'par', 'child must reference parent');
+
+    // Headline total must NOT double-count: child excluded, total = parent's 8.05.
+    assert.ok(Math.abs(r.totals.aiu - 8.05) < 0.01,
+      `totals.aiu should be ~8.05 (no double-count) but got ${r.totals.aiu}`);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});

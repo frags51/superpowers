@@ -508,3 +508,123 @@ test('late sessionStart reopens root phase so AIU is not dropped', () => {
     rmSync(path, { force: true });
   }
 });
+
+// Regression: when a parent session launches a subagent whose transcriptPath
+// encodes the child session ID (Copilot CLI convention:
+//   ~/.copilot/session-state/{session-id}/events.jsonl),
+// the child session ID must be extracted and stored in subagents.child_session_id
+// immediately at subagentStart time.  Without this link the parent session sees
+// 0 AIC because the parent's phase only queries its own usage_snapshots.
+test('subagent child_session_id extracted from transcript path at subagentStart', () => {
+  const { db, path } = freshDb();
+  try {
+    const parent = 'parent-1';
+    const child = 'child-abc-123';
+    const childTranscript = `/home/user/.copilot/session-state/${child}/events.jsonl`;
+
+    handle('sessionStart', { sessionId: parent, timestamp: 1000, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: parent, timestamp: 1100, cwd: '/x', prompt: 'Do a big task' }, db, opts());
+    handle('subagentStart', {
+      sessionId: parent, timestamp: 1200, cwd: '/x',
+      agentName: 'general-purpose', agentDescription: 'Build the feature',
+      transcriptPath: childTranscript,
+    }, db, opts());
+
+    const sub = db.get("SELECT child_session_id FROM subagents WHERE session_id=? AND agent_name='general-purpose'", [parent]);
+    assert.equal(sub.child_session_id, child, 'child_session_id must be extracted from transcript path immediately');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+// Regression: when subagentStart provides a non-standard transcript path (no
+// session-state/{id}/ segment), late-binding in sessionStart must fill in the
+// child_session_id when the child session registers.
+test('subagent child_session_id late-bound when transcript path is non-standard', () => {
+  const { db, path } = freshDb();
+  try {
+    const parent = 'parent-lb';
+    const child = 'child-lb';
+    const sharedTranscript = '/tmp/custom-path/events.jsonl'; // no session-state/ segment
+
+    handle('sessionStart', { sessionId: parent, timestamp: 1000, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: parent, timestamp: 1100, cwd: '/x', prompt: 'p' }, db, opts());
+    handle('subagentStart', {
+      sessionId: parent, timestamp: 1200, cwd: '/x',
+      agentName: 'explore', transcriptPath: sharedTranscript,
+    }, db, opts());
+
+    // child_session_id not yet set (path does not encode it).
+    let sub = db.get("SELECT child_session_id FROM subagents WHERE session_id=?", [parent]);
+    assert.equal(sub.child_session_id, null, 'no child_session_id before child registers');
+
+    // Child registers with the same transcriptPath -> late-bind fires.
+    handle('sessionStart', { sessionId: child, timestamp: 1210, cwd: '/x', transcriptPath: sharedTranscript }, db, opts());
+    sub = db.get("SELECT child_session_id FROM subagents WHERE session_id=?", [parent]);
+    assert.equal(sub.child_session_id, child, 'child_session_id filled in by late-binding in sessionStart');
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});
+
+// End-to-end regression: parent session shows 0 AIC while the subagent's real
+// usage lands in a separate child session.  After the fix, the parent's phase
+// aiu_delta must include the child session's contribution.
+test('e2e: parent phase aiu_delta includes child session snapshots (0 AIC bug)', () => {
+  const { db, path } = freshDb();
+  try {
+    const parent = 'e2e-parent';
+    const child = 'e2e-child';
+    const childTranscript = `/home/user/.copilot/session-state/${child}/events.jsonl`;
+
+    // Parent session: does very little work itself.
+    handle('sessionStart', { sessionId: parent, timestamp: 1000, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: parent, timestamp: 1100, cwd: '/x', prompt: 'Build the whole thing' }, db, opts());
+    db.run('INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
+      [parent, 1150, 0.1, 0, 0.01]);
+
+    // Parent launches subagent.
+    handle('subagentStart', {
+      sessionId: parent, timestamp: 1200, cwd: '/x',
+      agentName: 'general-purpose', agentDescription: 'Build the feature',
+      transcriptPath: childTranscript,
+    }, db, opts());
+
+    // Child session (separate Copilot CLI process, same DB).
+    handle('sessionStart', { sessionId: child, timestamp: 1210, cwd: '/x', transcriptPath: childTranscript }, db, opts());
+    handle('userPromptSubmitted', { sessionId: child, timestamp: 1220, cwd: '/x', prompt: '...' }, db, opts());
+    db.run('INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
+      [child, 1400, 3.0, 4, 0.30]);
+    db.run('INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
+      [child, 1600, 6.0, 8, 0.60]);
+    handle('sessionEnd', { sessionId: child, timestamp: 1700, cwd: '/x' }, db, opts());
+
+    // Parent wraps up.
+    handle('subagentStop', { session_id: parent, timestamp: 1750, agent_name: 'general-purpose', stop_reason: 'end_turn' }, db, opts());
+    handle('sessionEnd', { sessionId: parent, timestamp: 1800, cwd: '/x' }, db, opts());
+
+    const parentPhase = db.get("SELECT * FROM phases WHERE session_id=? AND kind='root'", [parent]);
+    assert.equal(parentPhase.status, 'closed');
+
+    // Before fix: aiu_delta ~= 0.1 (only parent's own snapshot delta).
+    // After fix:  aiu_delta ~= 0.1 + 6.0 = 6.1 (parent + child).
+    assert.ok(parentPhase.aiu_delta != null, 'aiu_delta must not be null');
+    assert.ok(parentPhase.aiu_delta > 1.0,
+      `parent aiu_delta should include child usage (>1) but got ${parentPhase.aiu_delta}`);
+    assert.ok(Math.abs(parentPhase.aiu_delta - 6.1) < 0.01,
+      `expected ~6.1 (parent 0.1 + child 6.0) but got ${parentPhase.aiu_delta}`);
+    assert.equal(parentPhase.premium_delta, 8);
+    assert.ok(Math.abs(parentPhase.cost_delta - 0.61) < 0.001);
+
+    // Child's own phase still records its contribution independently.
+    const childPhase = db.get("SELECT * FROM phases WHERE session_id=? AND kind='root'", [child]);
+    assert.equal(childPhase.status, 'closed');
+    assert.ok(Math.abs(childPhase.aiu_delta - 6.0) < 0.01,
+      `child aiu_delta should be its own total (6.0) but got ${childPhase.aiu_delta}`);
+  } finally {
+    db.close();
+    rmSync(path, { force: true });
+  }
+});

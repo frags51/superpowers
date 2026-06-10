@@ -30,6 +30,15 @@ function normalizeOpts(o = {}) {
 
 const sid = (p) => p.sessionId || p.session_id;
 
+// Extract a Copilot session ID from a transcript path that follows the CLI's
+// convention: …/session-state/{session-id}/events.jsonl (or …\session-state\…
+// on Windows). Returns null when the path doesn't match the pattern.
+function childSessionFromTranscript(transcriptPath) {
+  if (!transcriptPath || typeof transcriptPath !== 'string') return null;
+  const m = transcriptPath.match(/session-state[/\\]([^/\\]+)[/\\]/);
+  return m ? m[1] : null;
+}
+
 // Copilot CLI sends `timestamp` as a number for Copilot-native events but as an
 // ISO-8601 string for Claude-compatible events (PreToolUse, PostToolUse,
 // SessionStart, SessionEnd, UserPromptSubmit, SubagentStop). Accept both; fall
@@ -157,6 +166,28 @@ function finalizePhaseUsage(db, phase, opts) {
     [phase.session_id, phase.ended_at],
   );
   const d = snapshotDelta(snaps, phase.started_at, phase.ended_at);
+
+  // Roll in AIC from child sessions whose subagents were active during this phase.
+  // A child Copilot session's AIC counter is session-scoped (starts at 0), so
+  // snapshotDelta naturally zero-baselines when the child started after the
+  // parent phase began — the common case.
+  const children = db.all(
+    'SELECT child_session_id FROM subagents WHERE phase_id=? AND child_session_id IS NOT NULL',
+    [phase.phase_id],
+  );
+  for (const { child_session_id } of children) {
+    const childSnaps = db.all(
+      'SELECT captured_at, aiu, premium_requests, cost_total FROM usage_snapshots WHERE session_id=? ORDER BY captured_at',
+      [child_session_id],
+    );
+    if (!childSnaps.length) continue;
+    const cd = snapshotDelta(childSnaps, phase.started_at, phase.ended_at);
+    const add = (a, b) => (a == null && b == null ? null : (a ?? 0) + (b ?? 0));
+    d.aiu_delta = add(d.aiu_delta, cd.aiu_delta);
+    d.premium_delta = add(d.premium_delta, cd.premium_delta);
+    d.cost_delta = add(d.cost_delta, cd.cost_delta);
+  }
+
   const t = sumOutputTokens(transcriptFor(phase.session_id, opts), phase.started_at, phase.ended_at);
   db.run(
     'UPDATE phases SET aiu_delta=?, premium_delta=?, cost_delta=?, input_tokens=?, output_tokens=?, total_tokens=? WHERE phase_id=?',
@@ -263,6 +294,15 @@ const HANDLERS = {
     const existingTask = activeTask(db, s);
     if (existingTask) openPhase(db, existingTask, s, existingTask.feature, null, 'root', at);
     db.run("UPDATE subagents SET status='stopped', stop_reason='stale', ended_at=? WHERE session_id=? AND status='running'", [at, s]);
+    // Late-bind: when subagentStart fired with a transcript_path but
+    // childSessionFromTranscript could not extract a session ID (non-standard
+    // path), link this session to the waiting subagent row now that we know s.
+    if (transcript) {
+      db.run(
+        "UPDATE subagents SET child_session_id=? WHERE transcript_path=? AND child_session_id IS NULL AND status='running'",
+        [s, transcript],
+      );
+    }
   },
 
   userPromptSubmitted(db, p, opts) {
@@ -312,10 +352,13 @@ const HANDLERS = {
     const at = ts(p);
     const task = activeTask(db, s);
     const phase = activePhase(db, s);
+    // Extract the child Copilot session ID from the transcript path so parent
+    // phases can roll up child usage without any cooperation from the child process.
+    const childSessionId = childSessionFromTranscript(p.transcriptPath);
     db.run(
-      "INSERT INTO subagents (subagent_id, session_id, task_id, phase_id, agent_name, agent_display_name, description, transcript_path, started_at, status) VALUES (?,?,?,?,?,?,?,?,?, 'running')",
+      "INSERT INTO subagents (subagent_id, session_id, task_id, phase_id, agent_name, agent_display_name, description, transcript_path, child_session_id, started_at, status) VALUES (?,?,?,?,?,?,?,?,?,?, 'running')",
       [genId(), s, task ? task.task_id : null, phase ? phase.phase_id : null,
-        p.agentName, p.agentDisplayName || null, p.agentDescription || null, p.transcriptPath || null, at],
+        p.agentName, p.agentDisplayName || null, p.agentDescription || null, p.transcriptPath || null, childSessionId, at],
     );
   },
 

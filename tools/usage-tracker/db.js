@@ -82,6 +82,12 @@ function migrate(db) {
   const tryRun = (sql) => { try { db.run(sql); } catch { /* already applied */ } };
   tryRun('ALTER TABLE spans ADD COLUMN match_key TEXT');
   tryRun('CREATE INDEX IF NOT EXISTS idx_spans_match ON spans(session_id, match_key)');
+  // child_session_id: the session ID of the Copilot CLI child process launched as
+  // this subagent.  Extracted from the transcript path at subagentStart time so
+  // the parent session can roll up child usage without requiring any cooperation
+  // from the child process.
+  tryRun('ALTER TABLE subagents ADD COLUMN child_session_id TEXT');
+  tryRun('CREATE INDEX IF NOT EXISTS idx_subagents_child_sess ON subagents(child_session_id)');
 }
 
 export function openDb(path) {

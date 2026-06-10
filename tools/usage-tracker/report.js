@@ -173,22 +173,44 @@ export function buildReport(db, opts = {}) {
     liveAiuBySession.set(row.sid, Math.max(0, live));
   }
 
+  // Roll up child-session AIC into parent sessions so a parent that delegates
+  // all work to subagents shows real credits instead of 0.  The child session's
+  // AIC counter is session-scoped (starts at 0), so its live value is its full
+  // contribution.  We also record which sessions are child sessions so the
+  // headline total is not double-counted (child AIC is credited to the parent).
+  const childToParent = new Map(); // childSessionId -> parentSessionId
+  for (const row of db.all('SELECT session_id AS parent, child_session_id AS child FROM subagents WHERE child_session_id IS NOT NULL')) {
+    childToParent.set(row.child, row.parent);
+  }
+  const childAiuByParent = new Map(); // parentSessionId -> summed child live AIC
+  for (const [childId, parentId] of childToParent) {
+    const childLive = liveAiuBySession.get(childId) ?? 0;
+    childAiuByParent.set(parentId, (childAiuByParent.get(parentId) ?? 0) + childLive);
+  }
+
   const sessions = [...sessMap.values()].map((se) => {
     const t = toolBySess.get(se.sessionId) || { count: 0, durationMs: 0 };
     const sub = subBySess.get(se.sessionId) || { count: 0, running: 0 };
-    const aiu = liveAiuBySession.has(se.sessionId) ? liveAiuBySession.get(se.sessionId) : se.aiu;
+    let aiu = liveAiuBySession.has(se.sessionId) ? liveAiuBySession.get(se.sessionId) : se.aiu;
+    // Add child session AIC so the parent reflects total subagent cost.
+    aiu += (childAiuByParent.get(se.sessionId) ?? 0);
     return {
       ...se,
       aiu,
+      // Non-null when this session is itself a subagent launched by another session.
+      // The dashboard can use this to indent or dim child sessions.
+      parentSessionId: childToParent.get(se.sessionId) ?? null,
       toolCount: t.count, toolDurationMs: t.durationMs,
       subagentCount: sub.count, subagentRunning: sub.running,
       skills: se.skills.sort((a, z) => z.durationMs - a.durationMs),
     };
   }).sort((a, z) => (z.startedAt ?? z.firstAt ?? 0) - (a.startedAt ?? a.firstAt ?? 0));
 
-  // Headline AIC is the sum of the per-session live values, so the chip total
-  // stays consistent with the (now snapshot-backed) sessions list.
-  totals.aiu = sessions.reduce((acc, se) => acc + se.aiu, 0);
+  // Headline AIC: sum only top-level (non-child) sessions so child AIC is not
+  // double-counted (it's already included in the parent's aiu above).
+  totals.aiu = sessions
+    .filter((se) => se.parentSessionId == null)
+    .reduce((acc, se) => acc + se.aiu, 0);
 
   // --- Top tools -------------------------------------------------------------
   // Per-tool duration percentiles (P75/P95) are computed in JS from the sorted
