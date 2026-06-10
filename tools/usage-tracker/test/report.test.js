@@ -518,3 +518,33 @@ test('buildReport tasks: orphan phases (no tasks row) produce one entry per sess
     assert.equal(tb.repo, 'repoB');
   } finally { db.close(); rmSync(path, { force: true }); }
 });
+
+test('buildReport tasks: live AIC from snapshots distributed proportionally across tasks', () => {
+  const path = join(tmpdir(), `sp-report-${randomUUID()}.db`);
+  const db = openDb(path);
+  const T0 = 1_000_000_000_000;
+  try {
+    db.run(`INSERT INTO sessions (session_id, repo, branch, started_at) VALUES ('sx','repo','feat',${T0})`);
+    // Two tasks with different durations. Task 0 is longer (6000ms), task 1 shorter (2000ms).
+    db.run(`INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES ('sx:0','sx','feat',0,${T0})`);
+    db.run(`INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES ('sx:1','sx','feat',1,${T0 + 7000})`);
+    // Task 0: one closed phase (aiu_delta=0.10, dur=6000) and one still-open phase (aiu_delta=NULL, dur=0).
+    db.run(`INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, duration_ms, aiu_delta, total_tokens, status) VALUES ('px1','sx:0','sx','feat','brainstorming','skill',1,${T0},6000,0.10,50,'closed')`);
+    db.run(`INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, duration_ms, aiu_delta, total_tokens, status) VALUES ('px2','sx:0','sx','feat','writing-plans','skill',2,${T0 + 6000},0,NULL,0,'active')`);
+    // Task 1: one closed phase (aiu_delta=0.05, dur=2000).
+    db.run(`INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, duration_ms, aiu_delta, total_tokens, status) VALUES ('px3','sx:1','sx','feat','requesting-code-review','skill',1,${T0 + 7000},2000,0.05,20,'closed')`);
+    // Snapshot shows 0.80 cumulative AIC — well above the 0.15 finalized total.
+    db.run(`INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES ('sx', ${T0 + 8000}, 0.80)`);
+
+    const r = buildReport(db);
+    const byId = Object.fromEntries(r.tasks.map((t) => [t.taskId, t]));
+    const t0 = byId['sx:0'];
+    const t1 = byId['sx:1'];
+    assert.ok(t0 && t1, 'both tasks present');
+
+    // Total duration for session: t0=6000 (open phase has dur=0), t1=2000 → total=8000.
+    // Live AIC = 0.80. t0 gets 6000/8000 = 75% → 0.60. t1 gets 2000/8000 = 25% → 0.20.
+    assert.ok(Math.abs(t0.aiu - 0.60) < 0.001, `t0.aiu expected ~0.60, got ${t0.aiu}`);
+    assert.ok(Math.abs(t1.aiu - 0.20) < 0.001, `t1.aiu expected ~0.20, got ${t1.aiu}`);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});

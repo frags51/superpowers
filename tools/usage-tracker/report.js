@@ -394,9 +394,10 @@ export function buildReport(db, opts = {}) {
     if (live == null) continue;
     const finalizedTotal = tks.reduce((s, t) => s + t.aiu, 0);
     if (live <= finalizedTotal) continue; // finalized already at least as good
-    const totalDur = tks.reduce((s, t) => s + t.durationMs, 0) || 1;
+    const totalDur = tks.reduce((s, t) => s + t.durationMs, 0);
     for (const tk of tks) {
-      tk.aiu = live * (tk.durationMs / totalDur);
+      // Distribute proportionally by duration; equal share when no duration basis.
+      tk.aiu = totalDur > 0 ? live * (tk.durationMs / totalDur) : live / tks.length;
     }
   }
 
