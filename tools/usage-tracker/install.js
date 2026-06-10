@@ -21,15 +21,29 @@
 //   --no-snapshot   install only the hooks file (skip the snapshot statusLine)
 //   --hooks-only    alias for --no-snapshot
 //   --hooks         accepted for backward compatibility (no-op; hooks always install)
-import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, rmSync, cpSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { isMainModule } from './db.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 export const HOOKS_FILE_NAME = 'superpowers-usage.json';
+
+// The "lite" reporting install: a minimal, self-contained plugin that ships ONLY
+// the viewing-usage-dashboard skill (plus the dashboard files it needs to run),
+// so a user can open the usage dashboard by natural language without installing
+// the whole Superpowers skill library. It declares no hooks — tracking is
+// provided by the standalone hooks file — so installing it never double-counts.
+export const REPORTING_PLUGIN_NAME = 'copilot-usage-reporting';
+export const REPORTING_MARKETPLACE_NAME = 'copilot-usage-local';
+export const REPORTING_SKILL = 'viewing-usage-dashboard';
+// Minimal set of files dashboard.js needs at runtime (it + its local imports and
+// the static assets they read). Copied next to the skill so the skill's primary
+// "<plugin-root>/tools/usage-tracker/dashboard.js" path resolves on any machine.
+export const DASHBOARD_FILES = ['dashboard.js', 'report.js', 'db.js', 'dashboard.html', 'schema.sql'];
 const HOOK_EVENTS = [
   'sessionStart',
   'userPromptSubmitted',
@@ -93,24 +107,113 @@ function installHooksFile(copilotHome) {
   return hooksPath;
 }
 
+// --- Lite reporting-skill plugin ------------------------------------------
+
+// Where the generated minimal reporting plugin lives (under plugin-data, never
+// committed to the repo — it is rebuilt from source on every install).
+export function reportingPluginDir(copilotHome) {
+  return join(copilotHome, 'plugin-data', 'superpowers-usage', 'reporting-plugin');
+}
+
+function readSourceVersion(srcRoot) {
+  try {
+    const j = JSON.parse(readFileSync(join(srcRoot, '.claude-plugin', 'plugin.json'), 'utf8'));
+    return j.version || '0.0.0';
+  } catch { return '0.0.0'; }
+}
+
+// The plugin.json + marketplace.json for the generated reporting plugin. Pure so
+// it can be unit-tested without touching the filesystem.
+export function reportingPluginManifests(version = '0.0.0') {
+  const description =
+    'Copilot CLI usage reporting — the viewing-usage-dashboard skill that opens the local usage dashboard. Companion to the standalone usage tracker.';
+  const plugin = { name: REPORTING_PLUGIN_NAME, description, version, license: 'MIT' };
+  const marketplace = {
+    name: REPORTING_MARKETPLACE_NAME,
+    description: 'Local marketplace for the Copilot CLI usage reporting skill.',
+    owner: { name: 'Copilot CLI usage tracker' },
+    plugins: [{ name: REPORTING_PLUGIN_NAME, description, version, source: './' }],
+  };
+  return { plugin, marketplace };
+}
+
+// Generate the self-contained reporting plugin on disk. Copies the canonical
+// viewing-usage-dashboard skill and the minimal dashboard runtime so the plugin
+// works whether installed from a local checkout or the standalone clone. Returns
+// the plugin directory.
+export function buildReportingPlugin({ copilotHome, srcRoot = join(HERE, '..', '..'), toolDir = HERE } = {}) {
+  const dir = reportingPluginDir(copilotHome);
+  rmSync(dir, { recursive: true, force: true });
+
+  const skillDst = join(dir, 'skills', REPORTING_SKILL);
+  mkdirSync(skillDst, { recursive: true });
+  cpSync(join(srcRoot, 'skills', REPORTING_SKILL), skillDst, { recursive: true });
+
+  const toolDst = join(dir, 'tools', 'usage-tracker');
+  mkdirSync(toolDst, { recursive: true });
+  for (const f of DASHBOARD_FILES) copyFileSync(join(toolDir, f), join(toolDst, f));
+
+  const { plugin, marketplace } = reportingPluginManifests(readSourceVersion(srcRoot));
+  mkdirSync(join(dir, '.claude-plugin'), { recursive: true });
+  writeFileSync(join(dir, '.claude-plugin', 'plugin.json'), JSON.stringify(plugin, null, 2) + '\n');
+  writeFileSync(join(dir, '.claude-plugin', 'marketplace.json'), JSON.stringify(marketplace, null, 2) + '\n');
+  return dir;
+}
+
+// Run a `copilot` subcommand, capturing output. Returns {ok, out} instead of
+// throwing so callers can tolerate idempotent "already registered" errors and a
+// missing CLI. Exported so the uninstaller reuses the exact same invocation.
+export function runCopilot(args, exec = execFileSync) {
+  try {
+    const out = exec('copilot', args, { stdio: 'pipe', encoding: 'utf8' });
+    return { ok: true, out: out || '' };
+  } catch (e) {
+    const out = `${(e && e.stdout) || ''}${(e && e.stderr) || ''}`;
+    return { ok: false, out, code: e && e.code };
+  }
+}
+
+export function copilotAvailable(run = runCopilot) {
+  return run(['--version']).ok;
+}
+
+export function reportingPluginRef() {
+  return `${REPORTING_PLUGIN_NAME}@${REPORTING_MARKETPLACE_NAME}`;
+}
+
+// Register the generated plugin as a local marketplace and install it. Tolerant
+// of being re-run (idempotent "already" messages). Returns the plugin ref.
+export function registerReportingPlugin(dir, run = runCopilot) {
+  const ref = reportingPluginRef();
+  const mp = run(['plugin', 'marketplace', 'add', dir]);
+  if (!mp.ok && !/already/i.test(mp.out)) throw new Error(`marketplace add failed: ${mp.out}`);
+  const inst = run(['plugin', 'install', ref]);
+  if (!inst.ok && !/already/i.test(inst.out)) throw new Error(`plugin install failed: ${inst.out}`);
+  return ref;
+}
+
 // Resolve install mode from CLI args. Returns which artifacts to write:
-//   wantHooks    -> the standalone $COPILOT_HOME/hooks/superpowers-usage.json
-//   wantSnapshot -> the statusLine snapshot collector in settings.json
+//   wantHooks          -> the standalone $COPILOT_HOME/hooks/superpowers-usage.json
+//   wantSnapshot       -> the statusLine snapshot collector in settings.json
+//   wantReportingSkill -> the lite viewing-usage-dashboard plugin
 export function parseMode(argv) {
   const args = new Set(argv);
   const snapshotOnly = args.has('--snapshot-only') || args.has('--statusline-only');
   const hooksOnly = args.has('--no-snapshot') || args.has('--hooks-only');
+  const reportingOnly = args.has('--reporting-skill-only');
+  const wantReportingSkill = reportingOnly || args.has('--with-reporting-skill');
   return {
-    wantHooks: !snapshotOnly,
-    wantSnapshot: !hooksOnly,
+    wantHooks: !snapshotOnly && !reportingOnly,
+    wantSnapshot: !hooksOnly && !reportingOnly,
+    wantReportingSkill,
   };
 }
 
 function main() {
-  const { wantHooks, wantSnapshot } = parseMode(process.argv.slice(2));
+  const { wantHooks, wantSnapshot, wantReportingSkill } = parseMode(process.argv.slice(2));
   const COPILOT_HOME = process.env.COPILOT_HOME || join(homedir(), '.copilot');
 
-  console.log('Superpowers usage tracker installer');
+  console.log('Copilot CLI usage tracker installer');
   if (wantHooks) {
     const hooksPath = installHooksFile(COPILOT_HOME);
     console.log(`  hooks            -> ${hooksPath}`);
@@ -123,6 +226,18 @@ function main() {
     console.log('  (no visible status line; it only records AI-credit usage snapshots)');
   } else {
     console.log('  snapshot         -> (skipped; AI-credit usage will not be recorded)');
+  }
+  if (wantReportingSkill) {
+    const dir = buildReportingPlugin({ copilotHome: COPILOT_HOME });
+    console.log(`  reporting plugin -> ${dir}`);
+    if (copilotAvailable()) {
+      const ref = registerReportingPlugin(dir);
+      console.log(`  reporting skill  -> installed ${ref}`);
+    } else {
+      console.log('  reporting skill  -> built, but `copilot` is not on PATH; register it with:');
+      console.log(`       copilot plugin marketplace add "${dir}"`);
+      console.log(`       copilot plugin install ${REPORTING_PLUGIN_NAME}@${REPORTING_MARKETPLACE_NAME}`);
+    }
   }
   console.log('Restart Copilot CLI so the changes take effect.');
 }

@@ -20,6 +20,8 @@
 #   SUPERPOWERS_USAGE_REF   branch/tag/commit to install  (default: ghcp-native)
 #   SUPERPOWERS_USAGE_SRC   where to clone the source     (default: $COPILOT_HOME/plugin-data/superpowers-usage/src)
 #   SUPERPOWERS_USAGE_NO_SNAPSHOT=1   install hooks only (skip AI-credit snapshots)
+#   SUPERPOWERS_USAGE_WITH_SKILL=1    also install the viewing-usage-dashboard
+#                                     reporting skill (needs `copilot` on PATH)
 set -euo pipefail
 
 REPO_URL="${SUPERPOWERS_USAGE_REPO:-https://github.com/frags51/superpowers.git}"
@@ -74,13 +76,28 @@ INSTALL_FLAGS=""
 if [ "${SUPERPOWERS_USAGE_NO_SNAPSHOT:-0}" = "1" ]; then
   INSTALL_FLAGS="--no-snapshot"
 fi
+if [ "${SUPERPOWERS_USAGE_WITH_SKILL:-0}" = "1" ]; then
+  INSTALL_FLAGS="$INSTALL_FLAGS --with-reporting-skill"
+fi
 log "Installing into Copilot ($COPILOT_HOME)"
 COPILOT_HOME="$COPILOT_HOME" node "$TOOL_DIR/install.js" $INSTALL_FLAGS
 
 # 5) Done --------------------------------------------------------------------
+if [ "${SUPERPOWERS_USAGE_WITH_SKILL:-0}" = "1" ]; then
+  SKILL_NOTE='This also installed the viewing-usage-dashboard reporting skill (a
+minimal single-skill plugin), so you can ask Copilot to "open my usage
+dashboard" without the rest of the Superpowers library. For the FULL plugin
+(all skills + agents), in a Copilot CLI session run:'
+else
+  SKILL_NOTE='This installs usage TRACKING only (hooks + headless credit snapshots). It does
+NOT install any skills, so asking Copilot to "open my usage dashboard" is not
+enabled by this script. Re-run with SUPERPOWERS_USAGE_WITH_SKILL=1 to add just
+that reporting skill, or install the full plugin (skills + agents) — in a
+Copilot CLI session run:'
+fi
 cat <<EOF
 
-$(printf '\033[1;32m✓ Superpowers usage tracker installed.\033[0m')
+$(printf '\033[1;32m✓ Copilot CLI usage tracker installed.\033[0m')
 
   source     : $TOOL_DIR
   copilot    : $COPILOT_HOME
@@ -96,10 +113,7 @@ Next steps:
   4. Uninstall with:
        COPILOT_HOME="$COPILOT_HOME" node "$TOOL_DIR/uninstall.js"
 
-This installs usage TRACKING only (hooks + headless credit snapshots). It does
-NOT install the superpowers plugin, so the natural-language skills (e.g. asking
-Copilot to "open my usage dashboard") are not enabled by this script. To install
-the full plugin (skills + agents), in a Copilot CLI session run:
+$SKILL_NOTE
        /plugin marketplace add frags51/superpowers
        /plugin install superpowers@superpowers-dev
    Update it later with:   /plugin update superpowers

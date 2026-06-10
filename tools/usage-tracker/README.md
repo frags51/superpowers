@@ -250,6 +250,7 @@ Copilot CLI afterward. Overrides via environment:
 | `SUPERPOWERS_USAGE_REF` | branch/tag/commit | `ghcp-native` |
 | `SUPERPOWERS_USAGE_SRC` | where to clone | `$COPILOT_HOME/plugin-data/superpowers-usage/src` |
 | `SUPERPOWERS_USAGE_NO_SNAPSHOT=1` | install hooks only (skip credit snapshots) | off |
+| `SUPERPOWERS_USAGE_WITH_SKILL=1` | also install the `viewing-usage-dashboard` reporting skill (needs `copilot` on PATH) | off |
 
 Uninstall a standalone install with:
 
@@ -261,6 +262,30 @@ Uninstall a standalone install with:
 
 For a machine that should record events but not AI-credit usage, `node
 install.js --no-snapshot` writes only the hooks file (no statusLine collector).
+
+### Tracking + the reporting skill, without the full plugin
+
+The standalone install records usage but ships no skills, so you cannot ask
+Copilot to "open my usage dashboard" in natural language. To get the tracking
+hooks **plus only** the `viewing-usage-dashboard` skill — without the rest of
+the Superpowers library — run the standalone installer with
+`SUPERPOWERS_USAGE_WITH_SKILL=1`:
+
+    SUPERPOWERS_USAGE_WITH_SKILL=1 bash vendor/superpowers/tools/usage-tracker/setup.sh
+    # or, against an existing standalone install:
+    node vendor/superpowers/tools/usage-tracker/install.js --with-reporting-skill
+    # only the skill (skip the hooks/snapshot — e.g. they are already installed):
+    node vendor/superpowers/tools/usage-tracker/install.js --reporting-skill-only
+
+This generates a minimal, self-contained single-skill plugin under
+`$COPILOT_HOME/plugin-data/superpowers-usage/reporting-plugin/` (the skill plus
+just the dashboard files it needs — **no** tracking hooks, so events are never
+double-counted) and installs it via a local Copilot marketplace. It requires
+`copilot` on PATH; if the CLI is missing the installer still wires tracking and
+prints the two commands to register the skill later. `uninstall.js` removes the
+plugin, its local marketplace, and the generated directory. (On **Windows**, the
+`setup.ps1` one-liner installs the full plugin, which already includes this
+skill, so there is no separate lite option there.)
 
 ## Subagents CLI
 

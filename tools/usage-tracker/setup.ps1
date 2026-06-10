@@ -1,6 +1,8 @@
 # Install / update the Superpowers plugin + usage tracking (Windows PowerShell).
 #
-# This single script INSTALLS or UPDATES, whichever is needed:
+# The Windows counterpart to setup.sh. Unlike the macOS/Linux script — which
+# installs STANDALONE tracking (a cloned hooks file + snapshot) and no plugin —
+# this script INSTALLS or UPDATES, whichever is needed, via the Copilot CLI:
 #   1. Registers the `frags51/superpowers` plugin marketplace (idempotent).
 #   2. Installs the `superpowers` plugin via the Copilot CLI, or updates it if
 #      it is already installed. The plugin ships the tracking hooks, skills, and
@@ -11,16 +13,31 @@
 #   4. Cleans up artifacts from the older standalone installer so tracking does
 #      not run twice.
 #
-# Assumes the Copilot CLI (`copilot`, or `agency copilot`) and `node` are on PATH.
+# Assumes the Copilot CLI (`copilot`) and `node` are on PATH.
 #
-# One-liner (recommended on Windows) — installs OR updates:
+# Usage (one-liner) — installs OR updates:
 #   irm https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/setup.ps1 | iex
 #
 # irm downloads the script text and iex runs it (the PowerShell equivalent of
 # `curl | bash`). Works on Windows PowerShell 5.1 and PowerShell 7+.
 #
+# Usage (local checkout):
+#   powershell -File setup.ps1
+#
 # Environment overrides:
-#   COPILOT_HOME            Copilot config dir   (default: %USERPROFILE%\.copilot)
+#   COPILOT_HOME                     Copilot config dir   (default: %USERPROFILE%\.copilot)
+#   SUPERPOWERS_USAGE_NO_SNAPSHOT=1  install the plugin only; skip the AI-credit statusLine
+
+# Consistent logging with setup.sh: a cyan "==>" progress arrow and a red
+# "error:" prefix, each followed by the default-colored message.
+function Write-Log($msg) {
+  Write-Host '==>' -ForegroundColor Cyan -NoNewline
+  Write-Host " $msg"
+}
+function Write-Err($msg) {
+  Write-Host 'error:' -ForegroundColor Red -NoNewline
+  Write-Host " $msg"
+}
 
 function Install-Superpowers {
   $marketplaceSource = 'frags51/superpowers'
@@ -29,63 +46,72 @@ function Install-Superpowers {
   $pluginRef         = "$pluginName@$marketplaceName"
 
   function Test-HasCommand($name) { [bool](Get-Command $name -ErrorAction SilentlyContinue) }
-  $cli = Resolve-CopilotCli
-  if (-not $cli) { Write-Host 'error: could not find the Copilot CLI (`copilot` or `agency copilot`) on PATH' -ForegroundColor Red; return }
-  Write-Host "==> Using CLI: $($cli.Display)"
-  if (-not (Test-HasCommand 'node')) { Write-Host 'error: missing required command: node' -ForegroundColor Red; return }
+
+  # 1) Preconditions ---------------------------------------------------------
+  if (-not (Test-HasCommand 'copilot')) { Write-Err 'missing required command: copilot (the Copilot CLI is not on PATH)'; return }
+  if (-not (Test-HasCommand 'node'))    { Write-Err 'missing required command: node'; return }
 
   $copilotHome =
     if ($env:COPILOT_HOME)   { $env:COPILOT_HOME }
     elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.copilot' }
     else                      { Join-Path $HOME '.copilot' }
+  $skipSnapshot = ($env:SUPERPOWERS_USAGE_NO_SNAPSHOT -eq '1')
 
-  # 1) Register the marketplace (tolerate "already registered").
-  Write-Host "==> Registering marketplace $marketplaceSource"
-  $mp = (& $cli.Exe @($cli.Pre + @('plugin','marketplace','add',$marketplaceSource)) 2>&1 | Out-String)
+  # 2) Register the marketplace (tolerate "already registered").
+  Write-Log "Registering marketplace $marketplaceSource"
+  $mp = (& copilot plugin marketplace add $marketplaceSource 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0 -and $mp -notmatch 'already registered') {
-    Write-Host "error: failed to add marketplace:`n$mp" -ForegroundColor Red; return
+    Write-Err "failed to add marketplace:`n$mp"; return
   }
 
-  # 2) Install if missing, otherwise update.
-  $installed = (& $cli.Exe @($cli.Pre + @('plugin','list')) 2>&1 | Out-String)
+  # 3) Install if missing, otherwise update.
+  $installed = (& copilot plugin list 2>&1 | Out-String)
   if ($installed -match [regex]::Escape($pluginRef)) {
-    Write-Host "==> Updating plugin $pluginRef"
-    & $cli.Exe @($cli.Pre + @('plugin','update',$pluginRef))
+    Write-Log "Updating plugin $pluginRef"
+    & copilot plugin update $pluginRef
   } else {
-    Write-Host "==> Installing plugin $pluginRef"
-    & $cli.Exe @($cli.Pre + @('plugin','install',$pluginRef))
+    Write-Log "Installing plugin $pluginRef"
+    & copilot plugin install $pluginRef
   }
-  if ($LASTEXITCODE -ne 0) { Write-Host 'error: plugin install/update failed' -ForegroundColor Red; return }
+  if ($LASTEXITCODE -ne 0) { Write-Err 'plugin install/update failed'; return }
 
-  # 3) Locate the freshly installed plugin's usage-tracker dir and wire the
+  # 4) Locate the freshly installed plugin's usage-tracker dir and wire the
   #    statusLine snapshot collector (the part a plugin manifest cannot do).
   $tool = Find-UsageTrackerDir $copilotHome $marketplaceName $pluginName
   if (-not $tool) {
-    Write-Host "error: could not find the installed plugin's usage-tracker under $copilotHome\installed-plugins" -ForegroundColor Red
+    Write-Err "could not find the installed plugin's usage-tracker under $copilotHome\installed-plugins"
     return
   }
-  Write-Host "==> Wiring the AI-credit snapshot statusLine"
-  $env:COPILOT_HOME = $copilotHome
-  & node (Join-Path $tool 'install.js') --snapshot-only
-  if ($LASTEXITCODE -ne 0) { Write-Host 'error: failed to wire the statusLine' -ForegroundColor Red; return }
+  if ($skipSnapshot) {
+    Write-Log 'Skipping the AI-credit snapshot statusLine (SUPERPOWERS_USAGE_NO_SNAPSHOT=1)'
+  } else {
+    Write-Log 'Wiring the AI-credit snapshot statusLine'
+    $env:COPILOT_HOME = $copilotHome
+    & node (Join-Path $tool 'install.js') --snapshot-only
+    if ($LASTEXITCODE -ne 0) { Write-Err 'failed to wire the statusLine'; return }
+  }
 
-  # 4) Clean up artifacts from the older standalone installer: its own hooks
+  # 5) Clean up artifacts from the older standalone installer: its own hooks
   #    file (the plugin now provides hooks; keeping both double-counts) and its
   #    clone directory.
   Remove-LegacyArtifacts $copilotHome
 
   $dash = Join-Path $tool 'dashboard.js'
+  $statusLineSummary = if ($skipSnapshot) { '(skipped; AI-credit usage will not be recorded)' } else { Join-Path $tool 'snapshot.js' }
   Write-Host ''
-  Write-Host '  Superpowers installed/updated.' -ForegroundColor Green
+  Write-Host '  ✓ Superpowers installed/updated.' -ForegroundColor Green
+  Write-Host ''
   Write-Host "  plugin     : $pluginRef"
   Write-Host "  copilot    : $copilotHome"
-  Write-Host "  statusLine : $(Join-Path $tool 'snapshot.js')"
+  Write-Host "  statusLine : $statusLineSummary"
   Write-Host ''
   Write-Host '  Next steps:'
   Write-Host '    1. Restart Copilot CLI so the plugin + statusLine load.'
   Write-Host '    2. Ask Copilot to "open my usage dashboard", or run it directly:'
   Write-Host "         node ""$dash"" --open"
-  Write-Host '    3. Uninstall later with the uninstall.ps1 one-liner (see the README).'
+  Write-Host '    3. List active subagents any time with:'
+  Write-Host "         node ""$(Join-Path $tool 'subagents.js')"" --all"
+  Write-Host '    4. Uninstall later with the uninstall.ps1 one-liner (see the README).'
 }
 
 # Find <copilotHome>/installed-plugins/<marketplace>/<plugin>/tools/usage-tracker,
@@ -107,27 +133,14 @@ function Find-UsageTrackerDir($copilotHome, $marketplaceName, $pluginName) {
 function Remove-LegacyArtifacts($copilotHome) {
   $staleHooks = Join-Path $copilotHome 'hooks\superpowers-usage.json'
   if (Test-Path $staleHooks) {
-    Write-Host "==> Removing stale standalone hooks file (the plugin now provides hooks)"
+    Write-Log 'Removing stale standalone hooks file (the plugin now provides hooks)'
     Remove-Item -Force $staleHooks -ErrorAction SilentlyContinue
   }
   $oldClone = Join-Path $copilotHome 'plugin-data\superpowers-usage\src'
   if (Test-Path $oldClone) {
-    Write-Host "==> Removing old standalone clone at $oldClone"
+    Write-Log "Removing old standalone clone at $oldClone"
     Remove-Item -Recurse -Force $oldClone -ErrorAction SilentlyContinue
   }
-}
-
-# Resolve the Copilot CLI invocation. Prefers the `agency copilot` wrapper when
-# the `agency` command is present; otherwise falls back to a plain `copilot`.
-# Returns an object with: Exe (the executable), Pre (leading args), Display.
-function Resolve-CopilotCli {
-  if (Get-Command agency -ErrorAction SilentlyContinue) {
-    return [pscustomobject]@{ Exe = 'agency'; Pre = @('copilot'); Display = 'agency copilot' }
-  }
-  if (Get-Command copilot -ErrorAction SilentlyContinue) {
-    return [pscustomobject]@{ Exe = 'copilot'; Pre = @(); Display = 'copilot' }
-  }
-  return $null
 }
 
 Install-Superpowers

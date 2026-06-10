@@ -99,7 +99,7 @@ function main() {
 
   server.listen(args.port, () => {
     const url = `http://localhost:${args.port}/`;
-    console.log(`Superpowers usage dashboard`);
+    console.log(`Copilot CLI usage dashboard`);
     console.log(`  database : ${dbPath}`);
     console.log(`  open     : ${url}`);
     if (args.open) openInBrowser(url);

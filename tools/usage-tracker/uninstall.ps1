@@ -8,7 +8,7 @@
 #   3. Removes the `frags51/superpowers` marketplace registration.
 #   4. Cleans up any leftover standalone clone directory.
 #
-# Assumes the Copilot CLI (`copilot`, or `agency copilot`) is on PATH.
+# Assumes the Copilot CLI (`copilot`) is on PATH.
 #
 # One-liner (Windows):
 #   irm https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/uninstall.ps1 | iex
@@ -22,9 +22,7 @@ function Uninstall-Superpowers {
   $pluginRef       = "$pluginName@$marketplaceName"
 
   function Test-HasCommand($name) { [bool](Get-Command $name -ErrorAction SilentlyContinue) }
-  $cli = Resolve-CopilotCli
-  if (-not $cli) { Write-Host 'error: could not find the Copilot CLI (`copilot` or `agency copilot`) on PATH' -ForegroundColor Red; return }
-  Write-Host "==> Using CLI: $($cli.Display)"
+  if (-not (Test-HasCommand 'copilot')) { Write-Host 'error: missing required command: copilot (the Copilot CLI is not on PATH)' -ForegroundColor Red; return }
 
   $copilotHome =
     if ($env:COPILOT_HOME)   { $env:COPILOT_HOME }
@@ -45,14 +43,14 @@ function Uninstall-Superpowers {
 
   # 2) Uninstall the plugin (tolerate "not installed").
   Write-Host "==> Uninstalling plugin $pluginRef"
-  $out = (& $cli.Exe @($cli.Pre + @('plugin','uninstall',$pluginRef)) 2>&1 | Out-String)
+  $out = (& copilot plugin uninstall $pluginRef 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0 -and $out -notmatch 'not installed|not found') {
     Write-Host $out -ForegroundColor Yellow
   }
 
   # 3) Remove the marketplace registration (tolerate "not found").
   Write-Host "==> Removing marketplace $marketplaceName"
-  $out = (& $cli.Exe @($cli.Pre + @('plugin','marketplace','remove',$marketplaceName)) 2>&1 | Out-String)
+  $out = (& copilot plugin marketplace remove $marketplaceName 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0 -and $out -notmatch 'not found|not registered') {
     Write-Host $out -ForegroundColor Yellow
   }
@@ -99,19 +97,6 @@ function Remove-StatusLine($copilotHome) {
   }
   $staleHooks = Join-Path $copilotHome 'hooks\superpowers-usage.json'
   if (Test-Path $staleHooks) { Remove-Item -Force $staleHooks -ErrorAction SilentlyContinue }
-}
-
-# Resolve the Copilot CLI invocation. Prefers the `agency copilot` wrapper when
-# the `agency` command is present; otherwise falls back to a plain `copilot`.
-# Returns an object with: Exe (the executable), Pre (leading args), Display.
-function Resolve-CopilotCli {
-  if (Get-Command agency -ErrorAction SilentlyContinue) {
-    return [pscustomobject]@{ Exe = 'agency'; Pre = @('copilot'); Display = 'agency copilot' }
-  }
-  if (Get-Command copilot -ErrorAction SilentlyContinue) {
-    return [pscustomobject]@{ Exe = 'copilot'; Pre = @(); Display = 'copilot' }
-  }
-  return $null
 }
 
 Uninstall-Superpowers
