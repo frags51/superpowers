@@ -66,11 +66,13 @@ floored to a whole number) and **duration** (adaptive `12.3s` / `M:SS` /
 **AI credits**, and **Total time**.
 
 - **Usage** — a collapsible infographic: **repo → branch → skill**, showing AIC
-  and duration with the **start time** at each level. A **"What do these labels
-  mean?"** callout explains the tree's placeholders: `(unknown repo)` /
-  `(no branch)` (no git repo or branch detected), `(root)` (work outside any
-  skill — the implicit root phase), and `unknown` (a skill activated whose name
-  could not be resolved).
+  and duration with the **start time** at each level, ordered **most-recently
+  active first**. A **📦 Repos** dropdown (shown when more than one repo is
+  present) lets you tick exactly which repositories to display. A **"What do
+  these labels mean?"** callout explains the tree's placeholders: `(unknown
+  repo)` / `(no branch)` (no git repo or branch detected), `(root)` (work
+  outside any skill — the implicit root phase), and `unknown` (a skill activated
+  whose name could not be resolved).
 - **Sessions** — the same phase data pivoted by **session → skill**, **newest
   first**: one collapsible entry per agent run. Each session shows its
   Copilot-generated **title** as the headline (sourced at read time from
@@ -79,6 +81,11 @@ floored to a whole number) and **duration** (adaptive `12.3s` / `M:SS` /
   summary** of tool calls (count + time in tools) and subagents (count, with any
   still running), then its `skill` phases underneath with AIC + duration each.
   Sessions with no title yet fall back to showing `repo / branch`.
+
+Both the Usage and Sessions pages **paginate at 20 entries** (controls appear
+only once a page overflows), and their duration bars are scaled to the longest
+entry **on the current page** — so a single long-running outlier no longer
+flattens every other bar to the minimum width.
 - **Stats** — three overall tables for analysing usage by dimension. **Top
   tools** focuses on tool-use latency: per-tool **count**, **P75** and **P95**
   duration (the percentiles that matter for latency, computed nearest-rank), the

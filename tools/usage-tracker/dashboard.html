@@ -80,6 +80,17 @@
   .filterbar input:focus { outline:none; border-color:var(--accent); }
   .filterbar .meta { white-space:nowrap; }
   tr.filtered { display:none; }
+  .pager { display:flex; align-items:center; gap:10px; margin:10px 0; }
+  .pager button { padding:5px 12px; font-size:13px; }
+  .pager button:disabled { opacity:.4; cursor:default; border-color:var(--line); }
+  .repofilter { margin:0 0 14px; }
+  .repofilter > summary { color:var(--fg); font-weight:600; }
+  .repofilter .menu { display:flex; flex-direction:column; gap:6px; max-height:260px;
+    overflow:auto; padding:10px 14px; border-top:1px solid var(--line); }
+  .repofilter .menu-actions { display:flex; gap:8px; margin-bottom:4px; }
+  .repofilter .menu-actions button { padding:3px 10px; font-size:12px; }
+  .repofilter label { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:400; }
+  .repofilter label input { accent-color:var(--accent); }
 </style>
 </head>
 <body>
@@ -144,6 +155,33 @@ const ts = (ms) => {
 };
 
 let activeTab = 'usage';
+// Recency-ordered pagination kicks in only past PAGE_SIZE items per view.
+const PAGE_SIZE = 20;
+let usageTree = [];
+let usagePage = 1;
+let selectedRepos = null;      // Set of repo names to show, or null = show all
+let sessionsData = [];
+let sessionsPage = 1;
+
+function pageCount(total) { return Math.max(1, Math.ceil(total / PAGE_SIZE)); }
+
+function pager(kind, total, page, noun) {
+  if (pageCount(total) <= 1) return '';
+  const pages = pageCount(total);
+  const lo = (page - 1) * PAGE_SIZE + 1;
+  const hi = Math.min(total, page * PAGE_SIZE);
+  return `<div class="pager" data-kind="${kind}">
+    <button data-dir="prev"${page <= 1 ? ' disabled' : ''}>← Prev</button>
+    <span class="meta">${num(lo)}–${num(hi)} of ${num(total)} ${noun} · page ${page}/${pages}</span>
+    <button data-dir="next"${page >= pages ? ' disabled' : ''}>Next →</button>
+  </div>`;
+}
+
+function wirePager(kind, onPage) {
+  document.querySelectorAll(`.pager[data-kind="${kind}"] button`).forEach((b) => {
+    b.addEventListener('click', () => { if (!b.disabled) onPage(b.dataset.dir); });
+  });
+}
 
 function chips(t) {
   const c = [
@@ -183,34 +221,106 @@ function legend() {
   </details>`;
 }
 
-function renderUsage(tree) {
-  if (!tree.length) { $('#view-usage').innerHTML = legend() + '<div class="empty">No usage recorded yet.</div>'; return; }
-  const repoMax = Math.max(...tree.map(r => r.durationMs), 1);
-  $('#view-usage').innerHTML = legend() + tree.map((repo) => {
-    const brMax = Math.max(...repo.branches.map(b => b.durationMs), 1);
-    const branches = repo.branches.map((b) => {
-      const skMax = Math.max(...b.skills.map(s => s.durationMs), 1);
-      const skills = b.skills.map((s) => `
-        <div class="skill-row">
-          <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
-            <span class="ts">· started ${ts(s.firstAt)}</span></span>
-          <span class="bar"><i style="width:${pct(s.durationMs, skMax)}%"></i></span>
-          ${nums(s.aiu, s.durationMs)}
-        </div>`).join('');
-      return `<details open>
-        <summary>
-          <span class="name grow">🌿 ${esc(b.feature)} <span class="ts">· started ${ts(b.firstAt)}</span></span>
-          <span class="bar"><i style="width:${pct(b.durationMs, brMax)}%"></i></span>
-          ${nums(b.aiu, b.durationMs)}
-        </summary>${skills}</details>`;
-    }).join('');
+function repoItem(repo, repoMax) {
+  const brMax = Math.max(...repo.branches.map(b => b.durationMs), 1);
+  const branches = repo.branches.map((b) => {
+    const skMax = Math.max(...b.skills.map(s => s.durationMs), 1);
+    const skills = b.skills.map((s) => `
+      <div class="skill-row">
+        <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
+          <span class="ts">· started ${ts(s.firstAt)}</span></span>
+        <span class="bar"><i style="width:${pct(s.durationMs, skMax)}%"></i></span>
+        ${nums(s.aiu, s.durationMs)}
+      </div>`).join('');
     return `<details open>
       <summary>
-        <span class="name grow">📦 ${esc(repo.repo)} <span class="ts">· started ${ts(repo.firstAt)}</span></span>
-        <span class="bar"><i style="width:${pct(repo.durationMs, repoMax)}%"></i></span>
-        ${nums(repo.aiu, repo.durationMs)}
-      </summary>${branches}</details>`;
+        <span class="name grow">🌿 ${esc(b.feature)} <span class="ts">· started ${ts(b.firstAt)}</span></span>
+        <span class="bar"><i style="width:${pct(b.durationMs, brMax)}%"></i></span>
+        ${nums(b.aiu, b.durationMs)}
+      </summary>${skills}</details>`;
   }).join('');
+  return `<details open>
+    <summary>
+      <span class="name grow">📦 ${esc(repo.repo)} <span class="ts">· started ${ts(repo.firstAt)}</span></span>
+      <span class="bar"><i style="width:${pct(repo.durationMs, repoMax)}%"></i></span>
+      ${nums(repo.aiu, repo.durationMs)}
+    </summary>${branches}</details>`;
+}
+
+// Multi-select repo filter (page 1 only). Re-rendering the tree body leaves this
+// dropdown's DOM intact, so the menu stays open while several repos are toggled.
+function repoFilterBar(tree) {
+  if (tree.length <= 1) return '';
+  const opts = tree.map((r) => {
+    const checked = !selectedRepos || selectedRepos.has(r.repo) ? ' checked' : '';
+    return `<label><input type="checkbox" value="${esc(r.repo)}"${checked}> ${esc(r.repo)}</label>`;
+  }).join('');
+  const shown = selectedRepos ? selectedRepos.size : tree.length;
+  return `<details class="repofilter">
+    <summary>📦 Repos · ${shown}/${tree.length} shown</summary>
+    <div class="menu">
+      <div class="menu-actions">
+        <button type="button" data-act="all">Select all</button>
+        <button type="button" data-act="none">Clear</button>
+      </div>
+      ${opts}
+    </div>
+  </details>`;
+}
+
+function wireRepoFilter() {
+  const root = $('#view-usage .repofilter');
+  if (!root) return;
+  const apply = () => {
+    const boxes = [...root.querySelectorAll('input[type="checkbox"]')];
+    const checked = boxes.filter(b => b.checked).map(b => b.value);
+    selectedRepos = checked.length === boxes.length ? null : new Set(checked);
+    usagePage = 1;
+    root.querySelector('summary').textContent =
+      `📦 Repos · ${selectedRepos ? selectedRepos.size : boxes.length}/${boxes.length} shown`;
+    renderUsageBody();
+  };
+  root.querySelectorAll('input[type="checkbox"]').forEach(b => b.addEventListener('change', apply));
+  root.querySelectorAll('button[data-act]').forEach((btn) => btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const on = btn.dataset.act === 'all';
+    root.querySelectorAll('input[type="checkbox"]').forEach(b => { b.checked = on; });
+    apply();
+  }));
+}
+
+function renderUsage(tree) {
+  // Order repos by most-recent activity so the first page is the freshest work.
+  usageTree = [...tree].sort((a, z) => (z.lastAt ?? 0) - (a.lastAt ?? 0));
+  usagePage = 1;
+  if (selectedRepos) {
+    const names = new Set(usageTree.map(r => r.repo));
+    selectedRepos = new Set([...selectedRepos].filter(n => names.has(n)));
+    if (!selectedRepos.size) selectedRepos = null;
+  }
+  if (!usageTree.length) { $('#view-usage').innerHTML = legend() + '<div class="empty">No usage recorded yet.</div>'; return; }
+  $('#view-usage').innerHTML = legend() + repoFilterBar(usageTree) + '<div id="usage-body"></div>';
+  wireRepoFilter();
+  renderUsageBody();
+}
+
+function renderUsageBody() {
+  const filtered = selectedRepos ? usageTree.filter(r => selectedRepos.has(r.repo)) : usageTree;
+  const total = filtered.length;
+  if (usagePage > pageCount(total)) usagePage = pageCount(total);
+  const start = (usagePage - 1) * PAGE_SIZE;
+  const items = filtered.slice(start, start + PAGE_SIZE);
+  let html;
+  if (!items.length) {
+    html = '<div class="empty">No usage for the selected repos.</div>';
+  } else {
+    // Scale bars to the longest repo on THIS page so they stay comparable.
+    const repoMax = Math.max(...items.map(r => r.durationMs), 1);
+    const controls = pager('usage', total, usagePage, 'repos');
+    html = controls + items.map(r => repoItem(r, repoMax)).join('') + controls;
+  }
+  $('#usage-body').innerHTML = html;
+  wirePager('usage', (dir) => { usagePage += dir === 'next' ? 1 : -1; renderUsageBody(); });
 }
 
 function sessionsLegend() {
@@ -233,35 +343,52 @@ function sessionsLegend() {
   </details>`;
 }
 
+function sessionItem(se, seMax) {
+  const skMax = Math.max(...se.skills.map(s => s.durationMs), 1);
+  const sub = se.subagentCount
+    ? ` · 🤖 ${num(se.subagentCount)} subagent${se.subagentCount === 1 ? '' : 's'}`
+      + (se.subagentRunning ? ` (${num(se.subagentRunning)} running)` : '')
+    : '';
+  const summary = `<div class="skill-row"><span class="meta grow">🔧 ${num(se.toolCount)} tool calls`
+    + ` · ${sec(se.toolDurationMs)} in tools${sub}</span></div>`;
+  const skills = se.skills.map((s) => `
+    <div class="skill-row">
+      <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
+        <span class="ts">· started ${ts(s.firstAt)}</span></span>
+      <span class="bar"><i style="width:${pct(s.durationMs, skMax)}%"></i></span>
+      ${nums(s.aiu, s.durationMs)}
+    </div>`).join('');
+  const model = se.model ? ` <span class="meta">· ${esc(se.model)}</span>` : '';
+  const headline = se.title ? esc(se.title) : `${esc(se.repo)} / ${esc(se.branch)}`;
+  const where = se.title ? ` <span class="meta">· ${esc(se.repo)} / ${esc(se.branch)}</span>` : '';
+  return `<details open>
+    <summary>
+      <span class="name grow">🧵 ${headline}${where}${model}
+        <span class="ts">· started ${ts(se.startedAt ?? se.firstAt)}</span></span>
+      <span class="bar"><i style="width:${pct(se.durationMs, seMax)}%"></i></span>
+      ${nums(se.aiu, se.durationMs)}
+    </summary>${summary}${skills}</details>`;
+}
+
 function renderSessions(sessions) {
-  if (!sessions.length) { $('#view-sessions').innerHTML = sessionsLegend() + '<div class="empty">No sessions recorded yet.</div>'; return; }
-  const seMax = Math.max(...sessions.map(s => s.durationMs), 1);
-  $('#view-sessions').innerHTML = sessionsLegend() + sessions.map((se) => {
-    const skMax = Math.max(...se.skills.map(s => s.durationMs), 1);
-    const sub = se.subagentCount
-      ? ` · 🤖 ${num(se.subagentCount)} subagent${se.subagentCount === 1 ? '' : 's'}`
-        + (se.subagentRunning ? ` (${num(se.subagentRunning)} running)` : '')
-      : '';
-    const summary = `<div class="skill-row"><span class="meta grow">🔧 ${num(se.toolCount)} tool calls`
-      + ` · ${sec(se.toolDurationMs)} in tools${sub}</span></div>`;
-    const skills = se.skills.map((s) => `
-      <div class="skill-row">
-        <span class="name sub grow">${esc(s.skill)} <span class="meta">×${s.count}</span>
-          <span class="ts">· started ${ts(s.firstAt)}</span></span>
-        <span class="bar"><i style="width:${pct(s.durationMs, skMax)}%"></i></span>
-        ${nums(s.aiu, s.durationMs)}
-      </div>`).join('');
-    const model = se.model ? ` <span class="meta">· ${esc(se.model)}</span>` : '';
-    const headline = se.title ? esc(se.title) : `${esc(se.repo)} / ${esc(se.branch)}`;
-    const where = se.title ? ` <span class="meta">· ${esc(se.repo)} / ${esc(se.branch)}</span>` : '';
-    return `<details open>
-      <summary>
-        <span class="name grow">🧵 ${headline}${where}${model}
-          <span class="ts">· started ${ts(se.startedAt ?? se.firstAt)}</span></span>
-        <span class="bar"><i style="width:${pct(se.durationMs, seMax)}%"></i></span>
-        ${nums(se.aiu, se.durationMs)}
-      </summary>${summary}${skills}</details>`;
-  }).join('');
+  sessionsData = sessions;   // already newest-first from the report
+  sessionsPage = 1;
+  if (!sessionsData.length) { $('#view-sessions').innerHTML = sessionsLegend() + '<div class="empty">No sessions recorded yet.</div>'; return; }
+  $('#view-sessions').innerHTML = sessionsLegend() + '<div id="sessions-body"></div>';
+  renderSessionsBody();
+}
+
+function renderSessionsBody() {
+  const total = sessionsData.length;
+  if (sessionsPage > pageCount(total)) sessionsPage = pageCount(total);
+  const start = (sessionsPage - 1) * PAGE_SIZE;
+  const items = sessionsData.slice(start, start + PAGE_SIZE);
+  // Scale bars to the longest session on THIS page, so an off-page long-running
+  // outlier no longer flattens every visible bar to the 2% minimum.
+  const seMax = Math.max(...items.map(s => s.durationMs), 1);
+  const controls = pager('sessions', total, sessionsPage, 'sessions');
+  $('#sessions-body').innerHTML = controls + items.map(se => sessionItem(se, seMax)).join('') + controls;
+  wirePager('sessions', (dir) => { sessionsPage += dir === 'next' ? 1 : -1; renderSessionsBody(); });
 }
 
 // --- Stats tab: sortable + filterable analysis tables ----------------------
