@@ -446,3 +446,49 @@ test('buildReport: sentinel written for ended sessions with no session.shutdown'
     assert.equal(count.cnt, 1, 'sentinel must prevent duplicate reads on subsequent builds');
   } finally { db.close(); rmSync(path, { force: true }); rmSync(base, { recursive: true, force: true }); }
 });
+
+test('buildReport tasks: per-task AIC + duration + skill breakdown', () => {
+  const { db, path } = seed();
+  try {
+    // seed() inserts task s1:0 with phases p1 (brainstorming, 5000ms, 0.10 aiu)
+    // and p2 (writing-plans, 3000ms, 0.20 aiu). Add a second task for s1.
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at, ended_at, duration_ms) VALUES ('s1:1','s1','feat-a',1,9000,12000,3000)");
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, duration_ms, aiu_delta, total_tokens, status) VALUES ('p4','s1:1','s1','feat-a','requesting-code-review','skill',1,9000,3000,0.07,30,'closed')");
+
+    const r = buildReport(db);
+    assert.ok(Array.isArray(r.tasks), 'tasks array exists');
+
+    const byId = Object.fromEntries(r.tasks.map((t) => [t.taskId, t]));
+    const t0 = byId['s1:0'];
+    assert.ok(t0, 's1:0 task present');
+    assert.equal(t0.sessionId, 's1');
+    assert.equal(t0.feature, 'feat-a');
+    assert.equal(t0.durationMs, 8000);           // p1(5000) + p2(3000)
+    assert.equal(Math.round(t0.aiu * 100), 30);  // 0.10 + 0.20
+    assert.equal(t0.tokens, 150);                // 100 + 50
+
+    // skills sorted by durationMs desc
+    const skillNames = t0.skills.map((s) => s.skill);
+    assert.ok(skillNames.includes('brainstorming'), 'brainstorming present');
+    assert.ok(skillNames.includes('writing-plans'), 'writing-plans present');
+    assert.equal(t0.skills[0].skill, 'brainstorming'); // longer one first
+
+    const t1 = byId['s1:1'];
+    assert.ok(t1, 's1:1 task present');
+    assert.equal(t1.skills[0].skill, 'requesting-code-review');
+    assert.equal(t1.durationMs, 3000);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+test('buildReport tasks: range filter restricts tasks to window', () => {
+  const { db, path, T0, HOUR } = seedTimed();
+  try {
+    // seedTimed() has s1 at T0 and s2 at T0+HOUR. Add tasks for each.
+    db.run(`INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES ('s1:0','s1','feat-a',0,${T0})`);
+    db.run(`INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES ('s2:0','s2','feat-b',0,${T0 + HOUR})`);
+
+    // Only the recent window.
+    const r = buildReport(db, { from: T0 + HOUR - 1, to: T0 + HOUR + 1 });
+    assert.ok(r.tasks.every((t) => t.sessionId === 's2'), 'only s2 tasks in window');
+  } finally { db.close(); rmSync(path, { force: true }); }
+});

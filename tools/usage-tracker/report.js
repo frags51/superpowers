@@ -330,6 +330,57 @@ export function buildReport(db, opts = {}) {
       firstAt: ts(a.first_at), lastAt: ts(a.last_at),
     }));
 
+  // --- Tasks: one entry per task with per-skill breakdown --------------------
+  // Groups phases by task, joining back to sessions for repo/branch identity.
+  // Range filter applies to phases.started_at so tasks with NO phase in the
+  // window are excluded even if the task itself started outside the window.
+  const taskPhaseRows = db.all(`
+    SELECT COALESCE(t.task_id, '(unknown)')          AS task_id,
+           COALESCE(t.session_id, p.session_id)      AS session_id,
+           COALESCE(s.repo, '(unknown repo)')         AS repo,
+           COALESCE(s.branch, '(no branch)')          AS branch,
+           COALESCE(t.feature, '(no branch)')         AS feature,
+           t.label                                    AS label,
+           t.turn_index                               AS turn_index,
+           t.prompt_excerpt                           AS prompt_excerpt,
+           t.started_at                               AS task_started,
+           t.ended_at                                 AS task_ended,
+           COALESCE(p.skill, '(root)')                AS skill,
+           COUNT(*)                                   AS n,
+           COALESCE(SUM(p.aiu_delta), 0)              AS aiu,
+           COALESCE(SUM(p.duration_ms), 0)            AS duration_ms,
+           COALESCE(SUM(p.total_tokens), 0)           AS tokens,
+           MIN(p.started_at)                          AS first_at,
+           MAX(p.started_at)                          AS last_at
+    FROM phases p
+    LEFT JOIN tasks t  ON p.task_id = t.task_id AND p.session_id = t.session_id
+    LEFT JOIN sessions s ON p.session_id = s.session_id${r.where('p.started_at')}
+    GROUP BY t.task_id, p.skill`);
+
+  const taskMap = new Map();
+  for (const row of taskPhaseRows) {
+    const tid = row.task_id || '(unknown)';
+    let tk = taskMap.get(tid);
+    if (!tk) {
+      tk = {
+        taskId: tid, sessionId: row.session_id, repo: row.repo, branch: row.branch,
+        feature: row.feature, label: row.label ?? null, turnIndex: n(row.turn_index),
+        promptExcerpt: row.prompt_excerpt ?? null,
+        startedAt: ts(row.task_started), endedAt: ts(row.task_ended),
+        aiu: 0, durationMs: 0, tokens: 0, firstAt: null, lastAt: null, skills: [],
+      };
+      taskMap.set(tid, tk);
+    }
+    const first = ts(row.first_at); const last = ts(row.last_at);
+    tk.skills.push({ skill: row.skill, count: n(row.n), aiu: n(row.aiu), durationMs: n(row.duration_ms), tokens: n(row.tokens), firstAt: first, lastAt: last });
+    tk.aiu += n(row.aiu); tk.durationMs += n(row.duration_ms); tk.tokens += n(row.tokens);
+    tk.firstAt = minT(tk.firstAt, first); tk.lastAt = maxT(tk.lastAt, last);
+  }
+  const tasks = [...taskMap.values()].map((tk) => ({
+    ...tk,
+    skills: tk.skills.sort((a, z) => z.durationMs - a.durationMs),
+  })).sort((a, z) => (z.startedAt ?? z.firstAt ?? 0) - (a.startedAt ?? a.firstAt ?? 0));
+
   return {
     generatedAt: nowMs(),
     range: { from: r.from, to: r.to },
@@ -338,7 +389,7 @@ export function buildReport(db, opts = {}) {
       subagents: n(totals.subagents), durationMs: n(totals.duration_ms),
       aiu: n(totals.aiu), premium: n(totals.premium), cost: n(totals.cost), tokens: n(totals.tokens),
     },
-    tree, tools, skills, subagents, sessions,
+    tree, tools, skills, subagents, sessions, tasks,
   };
 }
 
