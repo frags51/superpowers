@@ -336,6 +336,7 @@ export function buildReport(db, opts = {}) {
   // window are excluded even if the task itself started outside the window.
   const taskPhaseRows = db.all(`
     SELECT COALESCE(t.task_id, '(unknown)')          AS task_id,
+           p.session_id                              AS phase_session_id,
            COALESCE(t.session_id, p.session_id)      AS session_id,
            COALESCE(s.repo, '(unknown repo)')         AS repo,
            COALESCE(s.branch, '(no branch)')          AS branch,
@@ -353,29 +354,52 @@ export function buildReport(db, opts = {}) {
            MIN(p.started_at)                          AS first_at,
            MAX(p.started_at)                          AS last_at
     FROM phases p
-    LEFT JOIN tasks t  ON p.task_id = t.task_id AND p.session_id = t.session_id
+    LEFT JOIN tasks t  ON p.task_id = t.task_id AND p.session_id = t.session_id /* compound key: task_ids like s1:0 repeat across sessions */
     LEFT JOIN sessions s ON p.session_id = s.session_id${r.where('p.started_at')}
-    GROUP BY t.task_id, p.skill`);
+    GROUP BY p.session_id, t.task_id, p.skill`);
 
   const taskMap = new Map();
   for (const row of taskPhaseRows) {
+    const sid = row.phase_session_id || row.session_id || '(unknown-session)';
     const tid = row.task_id || '(unknown)';
-    let tk = taskMap.get(tid);
+    const mapKey = `${sid}::${tid}`;
+    let tk = taskMap.get(mapKey);
     if (!tk) {
       tk = {
-        taskId: tid, sessionId: row.session_id, repo: row.repo, branch: row.branch,
+        taskId: tid, sessionId: sid, repo: row.repo, branch: row.branch,
         feature: row.feature, label: row.label ?? null, turnIndex: n(row.turn_index),
         promptExcerpt: row.prompt_excerpt ?? null,
         startedAt: ts(row.task_started), endedAt: ts(row.task_ended),
         aiu: 0, durationMs: 0, tokens: 0, firstAt: null, lastAt: null, skills: [],
       };
-      taskMap.set(tid, tk);
+      taskMap.set(mapKey, tk);
     }
     const first = ts(row.first_at); const last = ts(row.last_at);
     tk.skills.push({ skill: row.skill, count: n(row.n), aiu: n(row.aiu), durationMs: n(row.duration_ms), tokens: n(row.tokens), firstAt: first, lastAt: last });
     tk.aiu += n(row.aiu); tk.durationMs += n(row.duration_ms); tk.tokens += n(row.tokens);
     tk.firstAt = minT(tk.firstAt, first); tk.lastAt = maxT(tk.lastAt, last);
   }
+
+  // Substitute live AIC for tasks in sessions that have snapshot-based live values.
+  // A task's finalized aiu_delta sum can be 0 while the session's live counter is
+  // non-zero (e.g. its phases are still open). Distribute the session's live AIC
+  // proportionally to each task's share of the session's total finalized duration.
+  const sessionTasksBySession = new Map(); // sessionId -> [tk]
+  for (const [, tk] of taskMap) {
+    if (!sessionTasksBySession.has(tk.sessionId)) sessionTasksBySession.set(tk.sessionId, []);
+    sessionTasksBySession.get(tk.sessionId).push(tk);
+  }
+  for (const [sid, tks] of sessionTasksBySession) {
+    const live = liveAiuBySession.get(sid);
+    if (live == null) continue;
+    const finalizedTotal = tks.reduce((s, t) => s + t.aiu, 0);
+    if (live <= finalizedTotal) continue; // finalized already at least as good
+    const totalDur = tks.reduce((s, t) => s + t.durationMs, 0) || 1;
+    for (const tk of tks) {
+      tk.aiu = live * (tk.durationMs / totalDur);
+    }
+  }
+
   const tasks = [...taskMap.values()].map((tk) => ({
     ...tk,
     skills: tk.skills.sort((a, z) => z.durationMs - a.durationMs),

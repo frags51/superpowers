@@ -492,3 +492,29 @@ test('buildReport tasks: range filter restricts tasks to window', () => {
     assert.ok(r.tasks.every((t) => t.sessionId === 's2'), 'only s2 tasks in window');
   } finally { db.close(); rmSync(path, { force: true }); }
 });
+
+test('buildReport tasks: orphan phases (no tasks row) produce one entry per session', () => {
+  const path = join(tmpdir(), `sp-report-${randomUUID()}.db`);
+  const db = openDb(path);
+  const T0 = 1_000_000_000_000;
+  try {
+    db.run(`INSERT INTO sessions (session_id, repo, branch, started_at) VALUES ('sa','repoA','main',${T0})`);
+    db.run(`INSERT INTO sessions (session_id, repo, branch, started_at) VALUES ('sb','repoB','main',${T0 + 1})`);
+    // Two phases with no matching tasks row — one per session.
+    db.run(`INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, duration_ms, aiu_delta, total_tokens, status) VALUES ('pa','sa:0','sa','main','brainstorming','skill',1,${T0},1000,0.10,10,'closed')`);
+    db.run(`INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, duration_ms, aiu_delta, total_tokens, status) VALUES ('pb','sb:0','sb','main','brainstorming','skill',1,${T0+1},2000,0.20,20,'closed')`);
+    // No rows in tasks table — both are orphans.
+
+    const r = buildReport(db);
+    // Each session should get its own (unknown) task entry, not share one.
+    assert.equal(r.tasks.length, 2, 'two separate orphan task entries');
+    const sessions = new Set(r.tasks.map(t => t.sessionId));
+    assert.ok(sessions.has('sa'), 'sa task present');
+    assert.ok(sessions.has('sb'), 'sb task present');
+    // Identity fields should come from the correct session.
+    const ta = r.tasks.find(t => t.sessionId === 'sa');
+    assert.equal(ta.repo, 'repoA');
+    const tb = r.tasks.find(t => t.sessionId === 'sb');
+    assert.equal(tb.repo, 'repoB');
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
