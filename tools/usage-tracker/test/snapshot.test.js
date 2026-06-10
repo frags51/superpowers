@@ -2,22 +2,40 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { extractSnapshot, formatStatusLine } from '../snapshot.js';
 
-test('extractSnapshot pulls cumulative fields from statusObject', () => {
+// Mirrors the Copilot CLI v1.x statusObject: AI usage is reported as
+// `ai_used.total_nano_aiu` (AIU * 1e9), with `formatted` being a lossy display
+// string. premium_requests lives at `cost.total_premium_requests`.
+test('extractSnapshot reads AIU from ai_used.total_nano_aiu (current CLI schema)', () => {
   const s = {
     session_id: 'abc',
     model: { display_name: 'Opus 4.8' },
     context_window: { total_tokens: 15000, current_context_used_percentage: 18 },
-    ai_used: { formatted: '0.42', value: 0.42 },
-    cost: { total_premium_requests: 3, total: 0.5 },
+    ai_used: { total_nano_aiu: 420000000, formatted: '0.42' },
+    cost: { total_premium_requests: 3 },
   };
   const snap = extractSnapshot(s);
   assert.equal(snap.session_id, 'abc');
   assert.equal(snap.aiu, 0.42);
   assert.equal(snap.premium_requests, 3);
-  assert.equal(snap.cost_total, 0.5);
   assert.equal(snap.context_tokens, 15000);
   assert.equal(snap.context_pct, 18);
   assert.equal(snap.model, 'Opus 4.8');
+});
+
+// The lossy `formatted` string must never be used as the numeric source:
+// "<0.01" -> NaN, and rounded values drift. Only total_nano_aiu is exact.
+test('extractSnapshot uses exact nano value, not the lossy formatted string', () => {
+  const snap = extractSnapshot({
+    session_id: 'x',
+    ai_used: { total_nano_aiu: 5000000, formatted: '<0.01' },
+  });
+  assert.equal(snap.aiu, 0.005);
+});
+
+// Backward compatibility: older CLIs exposed a raw numeric `ai_used.value`.
+test('extractSnapshot falls back to legacy ai_used.value', () => {
+  const snap = extractSnapshot({ session_id: 'x', ai_used: { value: 1.25 } });
+  assert.equal(snap.aiu, 1.25);
 });
 
 test('extractSnapshot tolerates an empty statusObject', () => {
