@@ -27,6 +27,7 @@
 # Environment overrides:
 #   COPILOT_HOME                     Copilot config dir   (default: %USERPROFILE%\.copilot)
 #   SUPERPOWERS_USAGE_NO_SNAPSHOT=1  install the plugin only; skip the AI-credit statusLine
+#   SUPERPOWERS_USAGE_DEBUG=1        also show a live "⚡ <AIC> AIC" status line
 
 # Consistent logging with setup.sh: a cyan "==>" progress arrow and a red
 # "error:" prefix, each followed by the default-colored message.
@@ -56,6 +57,7 @@ function Install-Superpowers {
     elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.copilot' }
     else                      { Join-Path $HOME '.copilot' }
   $skipSnapshot = ($env:SUPERPOWERS_USAGE_NO_SNAPSHOT -eq '1')
+  $debugStatusLine = ($env:SUPERPOWERS_USAGE_DEBUG -eq '1')
 
   # 2) Register the marketplace (tolerate "already registered").
   Write-Log "Registering marketplace $marketplaceSource"
@@ -87,7 +89,9 @@ function Install-Superpowers {
   } else {
     Write-Log 'Wiring the AI-credit snapshot statusLine'
     $env:COPILOT_HOME = $copilotHome
-    & node (Join-Path $tool 'install.js') --snapshot-only
+    $snapshotArgs = @('--snapshot-only')
+    if ($debugStatusLine) { $snapshotArgs += '--debug' }
+    & node (Join-Path $tool 'install.js') @snapshotArgs
     if ($LASTEXITCODE -ne 0) { Write-Err 'failed to wire the statusLine'; return }
   }
 

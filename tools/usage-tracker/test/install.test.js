@@ -11,29 +11,33 @@ import {
 } from '../install.js';
 
 test('parseMode defaults to installing both hooks file and snapshot', () => {
-  assert.deepEqual(parseMode([]), { wantHooks: true, wantSnapshot: true, wantReportingSkill: false });
+  assert.deepEqual(parseMode([]), { wantHooks: true, wantSnapshot: true, wantReportingSkill: false, debug: false });
 });
 
 test('parseMode --snapshot-only installs the statusLine only (no hooks file)', () => {
-  assert.deepEqual(parseMode(['--snapshot-only']), { wantHooks: false, wantSnapshot: true, wantReportingSkill: false });
-  assert.deepEqual(parseMode(['--statusline-only']), { wantHooks: false, wantSnapshot: true, wantReportingSkill: false });
+  assert.deepEqual(parseMode(['--snapshot-only']), { wantHooks: false, wantSnapshot: true, wantReportingSkill: false, debug: false });
+  assert.deepEqual(parseMode(['--statusline-only']), { wantHooks: false, wantSnapshot: true, wantReportingSkill: false, debug: false });
 });
 
 test('parseMode --no-snapshot / --hooks-only installs the hooks file only', () => {
-  assert.deepEqual(parseMode(['--no-snapshot']), { wantHooks: true, wantSnapshot: false, wantReportingSkill: false });
-  assert.deepEqual(parseMode(['--hooks-only']), { wantHooks: true, wantSnapshot: false, wantReportingSkill: false });
+  assert.deepEqual(parseMode(['--no-snapshot']), { wantHooks: true, wantSnapshot: false, wantReportingSkill: false, debug: false });
+  assert.deepEqual(parseMode(['--hooks-only']), { wantHooks: true, wantSnapshot: false, wantReportingSkill: false, debug: false });
 });
 
 test('parseMode --hooks is a no-op (both still install)', () => {
-  assert.deepEqual(parseMode(['--hooks']), { wantHooks: true, wantSnapshot: true, wantReportingSkill: false });
+  assert.deepEqual(parseMode(['--hooks']), { wantHooks: true, wantSnapshot: true, wantReportingSkill: false, debug: false });
 });
 
 test('parseMode --with-reporting-skill adds the skill alongside hooks + snapshot', () => {
-  assert.deepEqual(parseMode(['--with-reporting-skill']), { wantHooks: true, wantSnapshot: true, wantReportingSkill: true });
+  assert.deepEqual(parseMode(['--with-reporting-skill']), { wantHooks: true, wantSnapshot: true, wantReportingSkill: true, debug: false });
 });
 
 test('parseMode --reporting-skill-only installs only the reporting skill', () => {
-  assert.deepEqual(parseMode(['--reporting-skill-only']), { wantHooks: false, wantSnapshot: false, wantReportingSkill: true });
+  assert.deepEqual(parseMode(['--reporting-skill-only']), { wantHooks: false, wantSnapshot: false, wantReportingSkill: true, debug: false });
+});
+
+test('parseMode --debug flags the live status line (alongside the defaults)', () => {
+  assert.deepEqual(parseMode(['--debug']), { wantHooks: true, wantSnapshot: true, wantReportingSkill: false, debug: true });
 });
 
 test('applyInstall sets statusLine; applyUninstall restores', () => {
@@ -41,11 +45,18 @@ test('applyInstall sets statusLine; applyUninstall restores', () => {
   const after = applyInstall({ ...before }, '/abs/snapshot.js');
   assert.equal(after.statusLine.type, 'command');
   assert.match(after.statusLine.command, /snapshot\.js/);
+  assert.doesNotMatch(after.statusLine.command, /--debug/);
   assert.equal(after.theme, 'dark');
 
   const restored = applyUninstall({ ...after });
   assert.equal(restored.statusLine, undefined);
   assert.equal(restored.theme, 'dark');
+});
+
+test('applyInstall --debug appends --debug to the statusLine command', () => {
+  const after = applyInstall({}, '/abs/snapshot.js', { debug: true });
+  assert.equal(after.statusLine.type, 'command');
+  assert.match(after.statusLine.command, /snapshot\.js"\s--debug$/);
 });
 
 test('buildHooksConfig wires all lifecycle events with absolute tracker path', () => {

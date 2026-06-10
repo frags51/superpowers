@@ -79,6 +79,9 @@ fi
 if [ "${SUPERPOWERS_USAGE_WITH_SKILL:-0}" = "1" ]; then
   INSTALL_FLAGS="$INSTALL_FLAGS --with-reporting-skill"
 fi
+if [ "${SUPERPOWERS_USAGE_DEBUG:-0}" = "1" ]; then
+  INSTALL_FLAGS="$INSTALL_FLAGS --debug"
+fi
 log "Installing into Copilot ($COPILOT_HOME)"
 COPILOT_HOME="$COPILOT_HOME" node "$TOOL_DIR/install.js" $INSTALL_FLAGS
 

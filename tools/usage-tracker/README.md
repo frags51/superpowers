@@ -34,8 +34,9 @@ The Copilot CLI fires lifecycle hooks; `tracker.js` turns them into rows:
   working on), start/stop, and a *reliable-only* duration.
 - **usage_snapshots** — raw cumulative usage captured by a **snapshot
   collector** (wired as the `statusLine`), the source for phase credit deltas.
-  The status line shows the session's cumulative **AI credits** (e.g. `⚡ 12.34
-  AIC`).
+  By default there is **no visible status line**; install with `--debug`
+  (or `SUPERPOWERS_USAGE_DEBUG=1`) to also show the session's cumulative **AI
+  credits** (e.g. `⚡ 12.34 AIC`).
 
 See the full schema and rationale in
 `docs/superpowers/specs/2026-06-08-superpowers-usage-tracking-design.md`
@@ -107,8 +108,9 @@ No hook carries token/credit data, so:
 
 - **Credits / premium / cost**: the `snapshot.js` collector (wired as the
   `statusLine`) records the CLI's cumulative `statusObject` figures into
-  `usage_snapshots` and renders the session's AI credits in the status line
-  (`⚡ <AIC> AIC`). A phase's usage is the **delta** of snapshots across its
+  `usage_snapshots` (and, when installed with `--debug`, renders them as a
+  `⚡ <AIC> AIC` status line). A phase's usage is the **delta** of snapshots
+  across its
   time window.
 - **Tokens**: summed from the session transcript (`events.jsonl`). The local
   transcript exposes **output** tokens only, so `input_tokens` is reserved
@@ -146,8 +148,9 @@ generated asynchronously by the CLI, very new sessions may not have a title yet.
 
 Tracking **hooks** load automatically when the superpowers plugin is installed
 via `/plugin`. Run the installer once to write the standalone hooks file and the
-snapshot collector (which records AI-credit usage and shows it in the status
-line — a plugin manifest cannot set it):
+snapshot collector (which records AI-credit usage — hidden by default, or shown
+as a `⚡ <AIC> AIC` status line with `--debug`; a plugin manifest cannot set
+it):
 
     node vendor/superpowers/tools/usage-tracker/install.js
     # hooks only, no credit snapshots:
@@ -272,6 +275,7 @@ Copilot CLI afterward. Overrides via environment:
 | `SUPERPOWERS_USAGE_SRC` | where to clone | `$COPILOT_HOME/plugin-data/superpowers-usage/src` |
 | `SUPERPOWERS_USAGE_NO_SNAPSHOT=1` | install hooks only (skip credit snapshots) | off |
 | `SUPERPOWERS_USAGE_WITH_SKILL=1` | also install the `viewing-usage-dashboard` reporting skill (needs `copilot` on PATH) | off |
+| `SUPERPOWERS_USAGE_DEBUG=1` | show a live `⚡ <AIC> AIC` status line (passes `--debug` to the installer) | off |
 
 Uninstall a standalone install with:
 

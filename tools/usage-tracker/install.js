@@ -4,10 +4,12 @@
 //   * hooks file   -> $COPILOT_HOME/hooks/superpowers-usage.json
 //       Records sessions/tasks/phases/spans/subagents from lifecycle events.
 //   * statusLine   -> settings.json (points at snapshot.js)
-//       A HEADLESS collector: it prints nothing (no visible status line) and
-//       only records cumulative usage snapshots (AI credits/premium/cost), which
-//       are the sole source of per-phase credit deltas. A plugin manifest cannot
-//       set statusLine, so it is wired here.
+//       A HEADLESS collector: by default it prints nothing (no visible status
+//       line) and only records cumulative usage snapshots (AI credits/premium/
+//       cost), which are the sole source of per-phase credit deltas. With the
+//       `--debug` flag it is wired with `--debug` so the snapshot ALSO renders a
+//       brief `⚡ <AIC> AIC` status line. A plugin manifest cannot set
+//       statusLine, so it is wired here.
 //
 // When the superpowers plugin is installed via /plugin, the hooks also load from
 // the plugin's hooks/hooks.json; this installer is still needed for the snapshot
@@ -21,6 +23,8 @@
 //   --no-snapshot   install only the hooks file (skip the snapshot statusLine)
 //   --hooks-only    alias for --no-snapshot
 //   --hooks         accepted for backward compatibility (no-op; hooks always install)
+//   --debug         wire the snapshot to also show a live `⚡ <AIC> AIC` status
+//                   line (default: the status line stays empty)
 import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, rmSync, cpSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,8 +58,9 @@ const HOOK_EVENTS = [
   'sessionEnd',
 ];
 
-export function applyInstall(settings, snapshotPath) {
-  settings.statusLine = { type: 'command', command: `node "${snapshotPath}"` };
+export function applyInstall(settings, snapshotPath, { debug = false } = {}) {
+  const command = `node "${snapshotPath}"${debug ? ' --debug' : ''}`;
+  settings.statusLine = { type: 'command', command };
   return settings;
 }
 export function applyUninstall(settings) {
@@ -87,12 +92,12 @@ function loadJsonc(file) {
   } catch { return {}; }
 }
 
-function installSnapshot(copilotHome) {
+function installSnapshot(copilotHome, { debug = false } = {}) {
   const settingsPath = join(copilotHome, 'settings.json');
   const snapshotPath = join(HERE, 'snapshot.js');
   const settings = loadJsonc(settingsPath);
   if (existsSync(settingsPath)) copyFileSync(settingsPath, settingsPath + '.usage-backup');
-  applyInstall(settings, snapshotPath);
+  applyInstall(settings, snapshotPath, { debug });
   mkdirSync(copilotHome, { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   return settingsPath;
@@ -196,6 +201,7 @@ export function registerReportingPlugin(dir, run = runCopilot) {
 //   wantHooks          -> the standalone $COPILOT_HOME/hooks/superpowers-usage.json
 //   wantSnapshot       -> the statusLine snapshot collector in settings.json
 //   wantReportingSkill -> the lite viewing-usage-dashboard plugin
+//   debug              -> wire the snapshot to show a live `⚡ <AIC> AIC` line
 export function parseMode(argv) {
   const args = new Set(argv);
   const snapshotOnly = args.has('--snapshot-only') || args.has('--statusline-only');
@@ -206,11 +212,12 @@ export function parseMode(argv) {
     wantHooks: !snapshotOnly && !reportingOnly,
     wantSnapshot: !hooksOnly && !reportingOnly,
     wantReportingSkill,
+    debug: args.has('--debug'),
   };
 }
 
 function main() {
-  const { wantHooks, wantSnapshot, wantReportingSkill } = parseMode(process.argv.slice(2));
+  const { wantHooks, wantSnapshot, wantReportingSkill, debug } = parseMode(process.argv.slice(2));
   const COPILOT_HOME = process.env.COPILOT_HOME || join(homedir(), '.copilot');
 
   console.log('Copilot CLI usage tracker installer');
@@ -221,9 +228,14 @@ function main() {
     console.log('  hooks            -> (skipped; the installed plugin provides tracking hooks)');
   }
   if (wantSnapshot) {
-    const p = installSnapshot(COPILOT_HOME);
-    console.log(`  snapshot (hidden)-> ${p}`);
-    console.log('  (no visible status line; it only records AI-credit usage snapshots)');
+    const p = installSnapshot(COPILOT_HOME, { debug });
+    if (debug) {
+      console.log(`  snapshot (debug) -> ${p}`);
+      console.log('  (status line shows live AI-credit usage: ⚡ <AIC> AIC)');
+    } else {
+      console.log(`  snapshot (hidden)-> ${p}`);
+      console.log('  (no visible status line; it only records AI-credit usage snapshots)');
+    }
   } else {
     console.log('  snapshot         -> (skipped; AI-credit usage will not be recorded)');
   }
