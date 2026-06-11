@@ -12,6 +12,7 @@
 import { join } from 'node:path';
 import { openDb, defaultDbPath, defaultSessionStorePath, loadSessionTitles, nowMs, isMainModule } from './db.js';
 import { readShutdownSnapshot, subagentWindowsFromTranscript } from './snapshot.js';
+import { snapshotDelta } from './usage.js';
 
 const n = (v) => (v == null ? 0 : Number(v));
 const ts = (v) => (v == null ? null : Number(v));
@@ -38,8 +39,77 @@ function rangeClauses(opts = {}) {
   };
 }
 
+// Self-healing recompute of stored phase usage deltas (see buildReport).
+// Only closed phases whose session has snapshots bracketing the phase window are
+// considered; phases with no usable snapshot baseline keep their stored delta
+// (protects sessions reconciled from shutdown-only data and test fixtures).
+function reconcilePhaseDeltas(db) {
+  let phases;
+  try {
+    phases = db.all(
+      "SELECT phase_id, session_id, started_at, ended_at, aiu_delta, premium_delta, cost_delta FROM phases WHERE status='closed' AND ended_at IS NOT NULL",
+    );
+  } catch { return; } // older schema / read-only DB — skip silently
+  if (!phases || !phases.length) return;
+
+  const snapsBySession = new Map();
+  const snapsFor = (sid) => {
+    if (!snapsBySession.has(sid)) {
+      snapsBySession.set(sid, db.all(
+        'SELECT captured_at, aiu, premium_requests, cost_total FROM usage_snapshots WHERE session_id=? ORDER BY captured_at',
+        [sid],
+      ));
+    }
+    return snapsBySession.get(sid);
+  };
+  const near = (a, b) => a == null && b == null
+    ? true
+    : (a == null || b == null ? false : Math.abs(Number(a) - Number(b)) < 1e-6);
+  const add = (a, b) => (a == null && b == null ? null : (a ?? 0) + (b ?? 0));
+
+  for (const p of phases) {
+    const own = snapsFor(p.session_id);
+    if (!own.length) continue;
+    const d = snapshotDelta(own, p.started_at, p.ended_at);
+    if (d.aiu_delta == null) continue; // no snapshot baseline in window — leave stored
+
+    // Roll in DISTINCT separate-child sessions (self-links/duplicates excluded).
+    const children = db.all(
+      'SELECT DISTINCT child_session_id FROM subagents WHERE phase_id=? AND child_session_id IS NOT NULL AND child_session_id<>?',
+      [p.phase_id, p.session_id],
+    );
+    for (const { child_session_id } of children) {
+      const cs = snapsFor(child_session_id);
+      if (!cs.length) continue;
+      const cd = snapshotDelta(cs, p.started_at, p.ended_at);
+      d.aiu_delta = add(d.aiu_delta, cd.aiu_delta);
+      d.premium_delta = add(d.premium_delta, cd.premium_delta);
+      d.cost_delta = add(d.cost_delta, cd.cost_delta);
+    }
+
+    if (near(d.aiu_delta, p.aiu_delta) && near(d.premium_delta, p.premium_delta) && near(d.cost_delta, p.cost_delta)) {
+      continue; // already correct — no churn
+    }
+    try {
+      db.run('UPDATE phases SET aiu_delta=?, premium_delta=?, cost_delta=? WHERE phase_id=?',
+        [d.aiu_delta, d.premium_delta, d.cost_delta, p.phase_id]);
+    } catch { /* best-effort — never let a write failure break the report */ }
+  }
+}
+
 export function buildReport(db, opts = {}) {
   const r = rangeClauses(opts);
+  // Self-heal historical phase deltas inflated by the legacy write-path bug,
+  // where finalizePhaseUsage rolled a phase's OWN snapshot delta back in once
+  // per self-linked (in-process) subagent row — over-reporting AIC/premium/cost
+  // in every view that reads stored phases.aiu_delta (tree, skills, tasks).
+  // Recompute the authoritative delta = own snapshot-window delta + distinct
+  // SEPARATE-child window deltas (self-links and duplicate child rows excluded),
+  // and persist it only when it actually differs. This reconciles exactly to the
+  // session-scoped cumulative counter and is idempotent (deterministic from
+  // immutable snapshots), so repeated builds make no further changes.
+  reconcilePhaseDeltas(db);
+
   // Read-time session "title" enrichment (Copilot's own session summaries),
   // injected by callers; absent/empty by default so the core report stays pure.
   const titles = opts.sessionTitles || {};
@@ -50,7 +120,7 @@ export function buildReport(db, opts = {}) {
       (SELECT COUNT(*) FROM tasks${r.where('started_at')})     AS tasks,
       (SELECT COUNT(*) FROM phases${r.where('started_at')})    AS phases,
       (SELECT COUNT(*) FROM subagents${r.where('started_at')}) AS subagents,
-      (SELECT COALESCE(SUM(duration_ms),0) FROM phases${r.where('started_at')}) AS duration_ms,
+      (SELECT COALESCE(SUM(duration_ms),0) FROM phases WHERE session_id IN (SELECT session_id FROM sessions)${r.and('started_at')}) AS duration_ms,
       (SELECT COALESCE(SUM(aiu_delta),0)   FROM phases${r.where('started_at')}) AS aiu,
       (SELECT COALESCE(SUM(premium_delta),0) FROM phases${r.where('started_at')}) AS premium,
       (SELECT COALESCE(SUM(cost_delta),0)  FROM phases${r.where('started_at')}) AS cost,
@@ -247,6 +317,14 @@ export function buildReport(db, opts = {}) {
   // real session's transcript for subagent.started/completed events, then
   // attribute the parent's cumulative-snapshot delta over the subagent's window
   // to the phantom session and nest it under the parent.
+  //
+  // Attribution rule (accuracy over precision): the parent's cumulative counter
+  // cannot be split between subagents that ran CONCURRENTLY, so any such split
+  // would be approximate. We therefore only attribute a per-subagent AIC when a
+  // subagent's window does NOT overlap any sibling window (reliable); overlapping
+  // subagents each show 0 and their combined consumption is surfaced once as the
+  // parent's overall subagent total (`subagentAiu`).
+  const subagentAiuByParent = new Map(); // parentSessionId -> overall subagent AIC
   if (resolveTranscript) {
     const realSessionIds = new Set(db.all('SELECT session_id FROM sessions').map((s) => s.session_id));
     const phantomIds = new Set(
@@ -264,37 +342,76 @@ export function buildReport(db, opts = {}) {
         }
         return snapsBySession.get(sid);
       };
+      // Parent cumulative-snapshot delta over [startedAt, endedAt]. Baseline =
+      // last snapshot at/before the window opened (or the session's 0 origin).
+      // Endpoint = first snapshot at/after it closed — the subagent's usage lands
+      // in the parent's counter only once the statusLine refreshes after it
+      // returns (it cannot fire while a sync subagent blocks the parent). Falls
+      // back to the last snapshot when none was captured after the window.
+      const windowDelta = (parentSnaps, startedAt, endedAt) => {
+        let base = 0;
+        for (const s of parentSnaps) {
+          if (s.captured_at <= startedAt) base = Number(s.aiu); else break;
+        }
+        const endRef = endedAt == null ? Infinity : endedAt;
+        let end = null;
+        for (const s of parentSnaps) {
+          if (s.captured_at >= endRef) { end = Number(s.aiu); break; }
+        }
+        if (end == null) end = Number(parentSnaps[parentSnaps.length - 1].aiu);
+        return Math.max(0, end - base);
+      };
       for (const parentId of realSessionIds) {
-        const windows = subagentWindowsFromTranscript(resolveTranscript(parentId));
-        if (!windows.length) continue;
+        const allWindows = subagentWindowsFromTranscript(resolveTranscript(parentId));
+        if (!allWindows.length) continue;
         const parentSnaps = snapsFor(parentId);
         if (!parentSnaps.length) continue;
+        const windows = allWindows.filter((w) => phantomIds.has(w.agentId) && w.startedAt != null);
+        if (!windows.length) continue;
+
+        // Register every phantom subagent under its parent (nested, titled).
         for (const w of windows) {
-          if (!phantomIds.has(w.agentId) || w.startedAt == null) continue;
-          // Baseline = last snapshot at/before the subagent started (or the
-          // session's 0 origin). Endpoint = first snapshot at/after it ended —
-          // the subagent's usage lands in the parent's counter only once the
-          // statusLine refreshes after it returns (it cannot fire while a sync
-          // subagent blocks the parent). Fall back to the last snapshot when no
-          // snapshot was captured after the window (e.g. still running).
-          let base = 0;
-          for (const s of parentSnaps) {
-            if (s.captured_at <= w.startedAt) base = Number(s.aiu); else break;
-          }
-          const endRef = w.endedAt == null ? Infinity : w.endedAt;
-          let end = null;
-          for (const s of parentSnaps) {
-            if (s.captured_at >= endRef) { end = Number(s.aiu); break; }
-          }
-          if (end == null) end = Number(parentSnaps[parentSnaps.length - 1].aiu);
-          liveAiuBySession.set(w.agentId, Math.max(0, end - base));
           childToParent.set(w.agentId, parentId);
           inProcessChild.add(w.agentId);
+          liveAiuBySession.set(w.agentId, 0); // default 0; reliable windows set below
           if (w.agentName) {
             const se = sessMap.get(w.agentId);
             if (se && !se.title) se.title = `${w.agentName} (subagent)`;
           }
         }
+
+        // Merge windows into overlap clusters (a window with endedAt==null runs
+        // to the parent's end, so treat it as open-ended for overlap purposes).
+        const sorted = [...windows].sort((a, b) => a.startedAt - b.startedAt);
+        const endOf = (w) => (w.endedAt == null ? Infinity : w.endedAt);
+        const clusters = [];
+        let cur = null;
+        for (const w of sorted) {
+          if (cur && w.startedAt < cur.maxEnd) {
+            cur.members.push(w);
+            cur.maxEnd = Math.max(cur.maxEnd, endOf(w));
+          } else {
+            cur = { minStart: w.startedAt, maxEnd: endOf(w), members: [w] };
+            clusters.push(cur);
+          }
+        }
+
+        let overall = 0;
+        for (const c of clusters) {
+          if (c.members.length === 1) {
+            // Non-overlapping: attribute the window delta reliably.
+            const w = c.members[0];
+            const d = windowDelta(parentSnaps, w.startedAt, w.endedAt);
+            liveAiuBySession.set(w.agentId, d);
+            overall += d;
+          } else {
+            // Concurrent subagents: per-subagent split is approximate -> each 0.
+            // Surface the cluster's combined consumption once via the parent's
+            // union window so the overall subagent total stays accurate.
+            overall += windowDelta(parentSnaps, c.minStart, c.maxEnd === Infinity ? null : c.maxEnd);
+          }
+        }
+        if (overall > 0) subagentAiuByParent.set(parentId, overall);
       }
     }
   }
@@ -320,6 +437,11 @@ export function buildReport(db, opts = {}) {
       parentSessionId: childToParent.get(se.sessionId) ?? null,
       toolCount: t.count, toolDurationMs: t.durationMs,
       subagentCount: sub.count, subagentRunning: sub.running,
+      // Overall AIC consumed by this session's in-process subagents (already
+      // inside `aiu`). Reliable per-subagent values are attributed to the nested
+      // subagent sessions; concurrent (overlapping) subagents show 0 each and are
+      // only represented here. Non-null only for parents with such subagents.
+      subagentAiu: subagentAiuByParent.has(se.sessionId) ? subagentAiuByParent.get(se.sessionId) : null,
       skills: se.skills.sort((a, z) => z.durationMs - a.durationMs),
     };
   }).sort((a, z) => (z.startedAt ?? z.firstAt ?? 0) - (a.startedAt ?? a.firstAt ?? 0));

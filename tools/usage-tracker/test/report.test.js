@@ -43,6 +43,20 @@ test('buildReport totals', () => {
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 
+// Regression (time double-count): in-process subagent phases are recorded under
+// a phantom session id and run WITHIN the parent's own phase wall-clock, so
+// summing them into headline duration double-counts time. totals.durationMs must
+// count only phases belonging to a real session.
+test('buildReport totals: phantom subagent phases excluded from headline duration', () => {
+  const { db, path } = seed();
+  try {
+    db.run("INSERT INTO phases (phase_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES ('ph','toolu_X','feat-a','root','root',1,4000,0.0,0,'closed')");
+    const r = buildReport(db);
+    assert.equal(r.totals.durationMs, 10000, 'phantom phase duration must not inflate headline time');
+    assert.equal(r.totals.phases, 4, 'phase COUNT still reflects all phase rows');
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
 test('buildReport tree: repo -> branch -> skill with credits + duration', () => {
   const { db, path } = seed();
   try {
@@ -320,7 +334,45 @@ test('buildReport: child session AIC rolls up into parent, headline total not do
   } finally { db.close(); rmSync(path, { force: true }); }
 });
 
-// Regression: an in-process `task`-tool subagent self-links (its subagents row
+// Regression (historical tree/skill inflation): closed phases finalized by the
+// buggy write-path carry an inflated stored aiu_delta (own delta re-added once
+// per self-linked subagent row). The tree/skill/task views read stored
+// aiu_delta directly, so they over-report AIC. buildReport must self-heal:
+// recompute each closed phase's delta from the session's own snapshot window
+// (plus distinct separate-child windows) so every view reconciles to the
+// authoritative session-scoped counter. The correction is idempotent.
+test('buildReport: self-heals inflated historical phase deltas (tree/skill not over-reported)', () => {
+  const path = join(tmpdir(), `sp-report-heal-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at) VALUES ('par','repo','main',1000)");
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES ('par:0','par','main',0,1000)");
+    // Inflated stored deltas (30 aiu, 27 premium, 9 cost) vs true window (10/9/3).
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, ended_at, duration_ms, aiu_delta, premium_delta, cost_delta, total_tokens, status) VALUES ('pp','par:0','par','main','brainstorming','skill',1,1000,5000,4000,30.0,27,9.0,100,'closed')");
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES ('par',1100,0.0,0,0.0)");
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES ('par',5000,10.0,9,3.0)");
+    // Self-linked in-process subagent rows are what inflated the stored delta.
+    db.run("INSERT INTO subagents (subagent_id, session_id, phase_id, agent_name, child_session_id, started_at, status) VALUES ('sa1','par','pp','explore','par',1200,'stopped')");
+    db.run("INSERT INTO subagents (subagent_id, session_id, phase_id, agent_name, child_session_id, started_at, status) VALUES ('sa2','par','pp','general-purpose','par',1300,'stopped')");
+
+    const r = buildReport(db);
+    const repo = r.tree.find((t) => t.repo === 'repo');
+    assert.ok(Math.abs(repo.aiu - 10.0) < 0.01,
+      `tree repo AIC should self-heal to 10.0 (own window) but got ${repo.aiu}`);
+    const skill = r.skills.find((s) => s.skill === 'brainstorming');
+    assert.ok(Math.abs(skill.aiu - 10.0) < 0.01,
+      `skill AIC should self-heal to 10.0 but got ${skill.aiu}`);
+    assert.ok(Math.abs(r.totals.aiu - 10.0) < 0.01, `totals.aiu should be 10.0 but got ${r.totals.aiu}`);
+    assert.ok(Math.abs(r.totals.premium - 9) < 0.01, `totals.premium should be 9 but got ${r.totals.premium}`);
+    assert.ok(Math.abs(r.totals.cost - 3.0) < 0.01, `totals.cost should be 3.0 but got ${r.totals.cost}`);
+
+    // Idempotent: a second build must not change the (now-correct) numbers.
+    const r2 = buildReport(db);
+    assert.ok(Math.abs(r2.tree.find((t) => t.repo === 'repo').aiu - 10.0) < 0.01, 'recompute must be idempotent');
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
+
 // carries child_session_id == the parent's own session_id, because the subagent
 // runs inside the parent session). buildReport must NOT add such a "child" back
 // into the parent — the AIC is already inside the parent's own session-scoped
@@ -394,6 +446,64 @@ test('buildReport: in-process subagent (phantom toolCallId session) gets windowe
     assert.ok(Math.abs(byId[parentId].aiu - 90.0) < 0.01,
       `parent aiu should be 90.0 (own live) but got ${byId[parentId].aiu}`);
     // Headline excludes the nested child, so no double-count.
+    assert.ok(Math.abs(r.totals.aiu - 90.0) < 0.01, `totals.aiu should be 90.0 but got ${r.totals.aiu}`);
+    // Single, non-overlapping subagent: reliably attributed AND surfaced as the
+    // parent's overall subagent total.
+    assert.ok(Math.abs(byId[parentId].subagentAiu - 12.0) < 0.01,
+      `parent subagentAiu should be 12.0 but got ${byId[parentId].subagentAiu}`);
+  } finally { db.close(); rmSync(path, { force: true }); rmSync(base, { recursive: true, force: true }); }
+});
+
+// Regression (overlap rule): when two subagents run CONCURRENTLY the parent's
+// cumulative counter cannot be split between them, so per-subagent attribution
+// is approximate. Each overlapping subagent must show 0 AIC, and their combined
+// consumption must be surfaced once as the parent's overall subagent total.
+test('buildReport: concurrent (overlapping) subagents show 0 each + overall subagent total', () => {
+  const base = mkdtempSync(join(tmpdir(), 'sp-report-overlap-'));
+  const parentId = 'parent-ov';
+  const a = 'toolu_A';
+  const b = 'toolu_B';
+  const sessDir = join(base, 'session-state', parentId);
+  mkdirSync(sessDir, { recursive: true });
+  const at = (s) => Date.parse(`2026-06-10T00:00:0${s}.000Z`);
+  writeFileSync(join(sessDir, 'events.jsonl'),
+    JSON.stringify({ type: 'session.start', data: {} }) + '\n'
+    + JSON.stringify({ type: 'subagent.started', agentId: a, data: { toolCallId: a, agentName: 'explore' }, timestamp: '2026-06-10T00:00:02.000Z' }) + '\n'
+    + JSON.stringify({ type: 'subagent.started', agentId: b, data: { toolCallId: b, agentName: 'explore' }, timestamp: '2026-06-10T00:00:03.000Z' }) + '\n'
+    + JSON.stringify({ type: 'subagent.completed', agentId: b, data: { toolCallId: b }, timestamp: '2026-06-10T00:00:05.000Z' }) + '\n'
+    + JSON.stringify({ type: 'subagent.completed', agentId: a, data: { toolCallId: a }, timestamp: '2026-06-10T00:00:06.000Z' }) + '\n');
+
+  const path = join(tmpdir(), `sp-report-overlap-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    const T = at(0);
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at, ended_at) VALUES (?,?,?,?,?)", [parentId, 'repo', 'main', T, at(9)]);
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES (?,?,?,?,?)", [`${parentId}:0`, parentId, 'main', 0, T]);
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)", ['pp', `${parentId}:0`, parentId, 'main', null, 'root', 0, 9000, 0.0, 0, 'closed']);
+    // Parent snapshots: 20 before the cluster (t1), 44 after it (t8), 90 at end.
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES (?,?,?)", [parentId, at(1), 20.0]);
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES (?,?,?)", [parentId, at(8), 44.0]);
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES (?,?,?)", [parentId, at(9), 90.0]);
+    // Two phantom subagent sessions (overlapping windows [t2,t6] and [t3,t5]).
+    for (const id of [a, b]) {
+      db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES (?,?,?,?,?)", [`${id}:0`, id, '(unknown)', 0, at(3)]);
+      db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, duration_ms, aiu_delta, total_tokens, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)", [`${id}-p`, `${id}:0`, id, '(unknown)', null, 'root', 0, 2000, 0.0, 0, 'closed']);
+    }
+
+    const resolveTranscript = (s) => join(base, 'session-state', s, 'events.jsonl');
+    const r = buildReport(db, { resolveTranscript });
+    const byId = Object.fromEntries(r.sessions.map((s) => [s.sessionId, s]));
+
+    // Each overlapping subagent shows 0 (approximate -> not attributed).
+    assert.equal(byId[a].aiu, 0, `overlapping subagent A should show 0 but got ${byId[a].aiu}`);
+    assert.equal(byId[b].aiu, 0, `overlapping subagent B should show 0 but got ${byId[b].aiu}`);
+    assert.equal(byId[a].parentSessionId, parentId);
+    assert.equal(byId[b].parentSessionId, parentId);
+    // Combined cluster consumption over union [t2,t6]: 44 (at t8) - 20 (at t1) = 24.
+    assert.ok(Math.abs(byId[parentId].subagentAiu - 24.0) < 0.01,
+      `parent subagentAiu should be 24.0 (combined) but got ${byId[parentId].subagentAiu}`);
+    // Parent headline stays its own counter; not inflated by the subset.
+    assert.ok(Math.abs(byId[parentId].aiu - 90.0) < 0.01, `parent aiu should be 90.0 but got ${byId[parentId].aiu}`);
     assert.ok(Math.abs(r.totals.aiu - 90.0) < 0.01, `totals.aiu should be 90.0 but got ${r.totals.aiu}`);
   } finally { db.close(); rmSync(path, { force: true }); rmSync(base, { recursive: true, force: true }); }
 });

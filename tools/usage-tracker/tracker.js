@@ -171,9 +171,17 @@ function finalizePhaseUsage(db, phase, opts) {
   // A child Copilot session's AIC counter is session-scoped (starts at 0), so
   // snapshotDelta naturally zero-baselines when the child started after the
   // parent phase began — the common case.
+  //
+  // Two guards keep the phase delta accurate:
+  //   * Self-links: in-process `task`-tool subagents record child_session_id ==
+  //     this phase's own session_id (they run inside the parent session). Their
+  //     AIC is ALREADY inside the parent's own snapshot delta `d` above, so
+  //     rolling them in would re-add the phase's own delta once per row.
+  //   * Duplicates: a child may be recorded by more than one subagent row;
+  //     DISTINCT ensures each separate child session is counted at most once.
   const children = db.all(
-    'SELECT child_session_id FROM subagents WHERE phase_id=? AND child_session_id IS NOT NULL',
-    [phase.phase_id],
+    'SELECT DISTINCT child_session_id FROM subagents WHERE phase_id=? AND child_session_id IS NOT NULL AND child_session_id<>?',
+    [phase.phase_id, phase.session_id],
   );
   for (const { child_session_id } of children) {
     const childSnaps = db.all(

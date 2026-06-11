@@ -630,6 +630,47 @@ test('e2e: parent phase aiu_delta includes child session snapshots (0 AIC bug)',
   }
 });
 
+// Regression (write-path double-count): an in-process `task`-tool subagent
+// self-links — its subagents.child_session_id == the parent's own session_id.
+// finalizePhaseUsage rolls child-session snapshot deltas into the phase, so a
+// self-link re-adds the parent's OWN delta once per self-linked row (and once
+// more per duplicate row), inflating the stored phase aiu_delta. The phase delta
+// must equal the parent's own snapshot-window delta, with self-links/dupes
+// excluded, so tree/skill/task totals are not inflated.
+test('e2e: self-linked subagents do not inflate parent phase aiu_delta (write-path)', () => {
+  const { db, path } = freshDb();
+  try {
+    const parent = 'selflink-parent';
+    handle('sessionStart', { sessionId: parent, timestamp: 1000, cwd: '/x' }, db, opts());
+    handle('userPromptSubmitted', { sessionId: parent, timestamp: 1100, cwd: '/x', prompt: 'Do work via subagents' }, db, opts());
+
+    // Parent's own cumulative snapshots climb by 8.0 AIC across the phase.
+    db.run('INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
+      [parent, 1050, 2.0, 1, 0.20]);
+    db.run('INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
+      [parent, 1700, 10.0, 5, 1.00]);
+
+    const phase = db.get("SELECT * FROM phases WHERE session_id=? AND kind='root'", [parent]);
+    // Three self-linked subagent rows (in-process subagents + a duplicate row),
+    // all pointing at the parent itself.
+    db.run("INSERT INTO subagents (subagent_id, session_id, phase_id, agent_name, child_session_id, started_at, status) VALUES ('s-a','" + parent + "','" + phase.phase_id + "','explore','" + parent + "',1200,'stopped')");
+    db.run("INSERT INTO subagents (subagent_id, session_id, phase_id, agent_name, child_session_id, started_at, status) VALUES ('s-b','" + parent + "','" + phase.phase_id + "','general-purpose','" + parent + "',1300,'stopped')");
+    db.run("INSERT INTO subagents (subagent_id, session_id, phase_id, agent_name, child_session_id, started_at, status) VALUES ('s-b-dup','" + parent + "','" + phase.phase_id + "','general-purpose','" + parent + "',1300,'stopped')");
+
+    handle('sessionEnd', { sessionId: parent, timestamp: 1800, cwd: '/x' }, db, opts());
+
+    const parentPhase = db.get("SELECT * FROM phases WHERE session_id=? AND kind='root'", [parent]);
+    assert.equal(parentPhase.status, 'closed');
+    // Own snapshot-window delta is 8.0 (10.0 - 2.0). Self-links/dupes must NOT add.
+    assert.ok(Math.abs(parentPhase.aiu_delta - 8.0) < 0.01,
+      `parent aiu_delta should be 8.0 (own delta, self-links excluded) but got ${parentPhase.aiu_delta}`);
+    assert.ok(Math.abs(parentPhase.premium_delta - 4) < 0.01,
+      `premium_delta should be 4 (own) but got ${parentPhase.premium_delta}`);
+    assert.ok(Math.abs(parentPhase.cost_delta - 0.80) < 0.001,
+      `cost_delta should be 0.80 (own) but got ${parentPhase.cost_delta}`);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});
+
 // Scenario 2: copilot launched via bash tool.
 // When the parent runs `copilot ...` via the bash tool, no subagentStart fires.
 // The bash span must be tagged detail='copilot-cli' and, when the child session

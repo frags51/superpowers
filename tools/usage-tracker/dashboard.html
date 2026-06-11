@@ -358,6 +358,7 @@ function sessionItem(se, seMax) {
   const sub = se.subagentCount
     ? ` · 🤖 ${num(se.subagentCount)} subagent${se.subagentCount === 1 ? '' : 's'}`
       + (se.subagentRunning ? ` (${num(se.subagentRunning)} running)` : '')
+      + (se.subagentAiu != null ? ` · ${num(se.subagentAiu)} AIC total` : '')
     : '';
   const summary = `<div class="skill-row"><span class="meta grow">🔧 ${num(se.toolCount)} tool calls`
     + ` · ${sec(se.toolDurationMs)} in tools${sub}</span></div>`;
