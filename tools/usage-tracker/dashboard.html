@@ -22,7 +22,9 @@
   button:hover { border-color:var(--accent); }
   button.primary { background:var(--accent); color:#0b0f16; border-color:var(--accent); font-weight:600; }
   .tabs { display:flex; gap:6px; }
-  .tab { padding:6px 14px; border-radius:8px; cursor:pointer; color:var(--muted); }
+  .tab { padding:6px 14px; border-radius:8px; cursor:pointer; color:var(--muted);
+    background:none; border:none; font:inherit; font-size:14px; }
+  .tab:hover { color:var(--fg); }
   .tab.active { background:var(--panel2); color:var(--fg); }
   .meta { color:var(--muted); font-size:12px; }
   .range { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -91,16 +93,27 @@
   .repofilter .menu-actions button { padding:3px 10px; font-size:12px; }
   .repofilter label { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:400; }
   .repofilter label input { accent-color:var(--accent); }
+  .chips-range { font-size:11px; color:var(--muted); margin-bottom:14px; margin-top:-10px; }
+  .child-badge { font-size:11px; color:var(--muted);
+    background:var(--panel2); border:1px solid var(--line); border-radius:5px;
+    padding:1px 6px; margin-left:4px; white-space:nowrap; }
+  .child-session summary { opacity:.7; }
+  .child-session .credit { color:var(--muted) !important; }
+  .sessfilterbar { display:flex; align-items:center; gap:10px; margin:0 0 8px; }
+  .sessfilterbar input { flex:1; max-width:360px; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:7px 11px; font-size:13px; font-family:inherit; }
+  .sessfilterbar input:focus { outline:none; border-color:var(--accent); }
+  .sessfilterbar .meta { white-space:nowrap; }
 </style>
 </head>
 <body>
 <header>
   <h1>⚡ Copilot CLI usage</h1>
-  <div class="tabs">
-    <div class="tab active" data-tab="usage">Usage</div>
-    <div class="tab" data-tab="sessions">Sessions</div>
-    <div class="tab" data-tab="tasks">Tasks</div>
-    <div class="tab" data-tab="stats">Stats</div>
+  <div class="tabs" role="tablist">
+    <button class="tab active" role="tab" aria-selected="true" data-tab="usage">Usage</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="sessions">Sessions</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="tasks">Tasks</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="stats">Stats</button>
   </div>
   <div class="spacer"></div>
   <div class="range">
@@ -127,6 +140,7 @@
 </header>
 <main>
   <div class="chips" id="chips"></div>
+  <div class="chips-range" id="chips-range"></div>
   <section id="view-usage"></section>
   <section id="view-sessions" class="hidden"></section>
   <section id="view-tasks" class="hidden"></section>
@@ -148,7 +162,15 @@ const sec = (ms) => {
   const pad = (n) => String(n).padStart(2, '0');
   return h > 0 ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
 };
-const aic = (v) => Math.floor(Number(v||0)).toLocaleString();
+const aic = (v) => Number(v||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+// Abbreviated form for summary chips only: 1.23K, 4.56M, etc.
+const aicSummary = (v) => {
+  const n = Number(v || 0);
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+  return n.toFixed(2);
+};
 const num = (v) => Number(v||0).toLocaleString();
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pct = (v, max) => (max > 0 ? Math.max(2, Math.round((v/max)*100)) : 0);
@@ -167,6 +189,7 @@ let usagePage = 1;
 let selectedRepos = null;      // Set of repo names to show, or null = show all
 let sessionsData = [];
 let sessionsPage = 1;
+let sessionsFilter = '';
 let tasksData = [];
 let tasksPage = 1;
 let hideRoot = false;
@@ -191,13 +214,14 @@ function wirePager(kind, onPage) {
   });
 }
 
-function chips(t) {
+function chips(t, rangeLabel) {
   const c = [
     ['Sessions', num(t.sessions)], ['Phases', num(t.phases)],
-    ['Subagents', num(t.subagents)], ['AI credits', aic(t.aiu) + ' AIC'],
+    ['Subagents', num(t.subagents)], ['AI credits', aicSummary(t.aiu) + ' AIC'],
     ['Total time', sec(t.durationMs)],
   ];
   $('#chips').innerHTML = c.map(([k,v]) => `<div class="chip"><b>${v}</b><span>${k}</span></div>`).join('');
+  $('#chips-range').textContent = rangeLabel ? `Showing: ${rangeLabel} · AI credits = top-level sessions only (subagents included in parent)` : '';
 }
 
 function nums(aiuVal, durMs) {
@@ -342,6 +366,11 @@ function sessionsLegend() {
     <dl>
       <dt>🧵 <code>(unknown repo)</code> / <code>(no branch)</code></dt>
       <dd>No git repository or branch could be detected for the session.</dd>
+      <dt>🤖 <span class="child-badge">↳ subagent · AIC included in parent</span></dt>
+      <dd>This session was launched as a subagent of another session. Its AI credits are
+        already counted inside the parent's total — do <em>not</em> add them again when
+        summing across sessions. The headline "AI credits" chip excludes child sessions to
+        avoid double-counting.</dd>
       <dt><code>(root)</code></dt>
       <dd>Work in a task <i>outside</i> any superpowers skill — the implicit root
         phase that runs before, between, and after skill activations.</dd>
@@ -353,6 +382,7 @@ function sessionsLegend() {
 }
 
 function sessionItem(se, seMax) {
+  const isChild = !!se.parentSessionId;
   const visSkills = hideRoot ? se.skills.filter(s => s.skill !== '(root)') : se.skills;
   const skMax = Math.max(...visSkills.map(s => s.durationMs), 1);
   const sub = se.subagentCount
@@ -372,12 +402,17 @@ function sessionItem(se, seMax) {
   const model = se.model ? ` <span class="meta">· ${esc(se.model)}</span>` : '';
   const headline = se.title ? esc(se.title) : `${esc(se.repo)} / ${esc(se.branch)}`;
   const where = se.title ? ` <span class="meta">· ${esc(se.repo)} / ${esc(se.branch)}</span>` : '';
-  return `<details open>
+  const childBadge = isChild ? ` <span class="child-badge">↳ subagent · AIC included in parent</span>` : '';
+  const icon = isChild ? '🤖' : '🧵';
+  const numsHtml = isChild
+    ? `<span class="nums"><span class="credit" title="Included in parent session's total">${aic(se.aiu)} AIC↑</span><span class="dur">${sec(se.durationMs)}</span></span>`
+    : nums(se.aiu, se.durationMs);
+  return `<details open class="${isChild ? 'child-session' : ''}">
     <summary>
-      <span class="name grow">🧵 ${headline}${where}${model}
+      <span class="name grow">${icon} ${headline}${where}${model}${childBadge}
         <span class="ts">· started ${ts(se.startedAt ?? se.firstAt)}</span></span>
       <span class="bar"><i style="width:${pct(se.durationMs, seMax)}%"></i></span>
-      ${nums(se.aiu, se.durationMs)}
+      ${numsHtml}
     </summary>${summary}${skills}</details>`;
 }
 
@@ -446,20 +481,46 @@ function renderTasksBody() {
 function renderSessions(sessions) {
   sessionsData = sessions;   // already newest-first from the report
   sessionsPage = 1;
+  sessionsFilter = '';
   if (!sessionsData.length) { $('#view-sessions').innerHTML = sessionsLegend() + '<div class="empty">No sessions recorded yet.</div>'; return; }
-  $('#view-sessions').innerHTML = sessionsLegend() + '<div id="sessions-body"></div>';
+  $('#view-sessions').innerHTML = sessionsLegend()
+    + `<div class="sessfilterbar">
+        <input id="sess-filter" type="search" placeholder="Filter by title, repo, or branch…" aria-label="Filter sessions" />
+        <span class="meta" id="sess-filter-meta"></span>
+      </div>`
+    + '<div id="sessions-body"></div>';
+  $('#sess-filter').addEventListener('input', () => {
+    sessionsFilter = $('#sess-filter').value.trim().toLowerCase();
+    sessionsPage = 1;
+    renderSessionsBody();
+  });
   renderSessionsBody();
 }
 
+function filteredSessions() {
+  if (!sessionsFilter) return sessionsData;
+  return sessionsData.filter((se) => {
+    const hay = [se.title, se.repo, se.branch].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(sessionsFilter);
+  });
+}
+
 function renderSessionsBody() {
-  const total = sessionsData.length;
+  const filtered = filteredSessions();
+  const total = filtered.length;
   if (sessionsPage > pageCount(total)) sessionsPage = pageCount(total);
   const start = (sessionsPage - 1) * PAGE_SIZE;
-  const items = sessionsData.slice(start, start + PAGE_SIZE);
+  const items = filtered.slice(start, start + PAGE_SIZE);
   // Scale bars to the longest session on THIS page, so an off-page long-running
   // outlier no longer flattens every visible bar to the 2% minimum.
   const seMax = Math.max(...items.map(s => s.durationMs), 1);
   const controls = pager('sessions', total, sessionsPage, 'sessions');
+  const metaEl = $('#sess-filter-meta');
+  if (metaEl) metaEl.textContent = sessionsFilter ? `${total} of ${sessionsData.length} sessions` : '';
+  if (!items.length) {
+    $('#sessions-body').innerHTML = '<div class="empty">No sessions match the filter.</div>';
+    return;
+  }
   $('#sessions-body').innerHTML = controls + items.map(se => sessionItem(se, seMax)).join('') + controls;
   wirePager('sessions', (dir) => { sessionsPage += dir === 'next' ? 1 : -1; renderSessionsBody(); });
 }
@@ -653,13 +714,14 @@ async function load() {
   if (range.to != null) qs.set('to', String(Math.floor(range.to)));
   try {
     const r = await (await fetch('/api/report?' + qs.toString())).json();
-    chips(r.totals);
+    const label = rangeLabel(range);
+    chips(r.totals, label);
     renderUsage(r.tree);
     renderSessions(r.sessions);
     renderTasks(r.tasks || []);
     renderStats(r);
     const when = new Date(r.generatedAt).toLocaleTimeString();
-    $('#meta').textContent = `${r.dbPath || ''} · ${rangeLabel(range)} · updated ${when}`;
+    $('#meta').textContent = `${r.dbPath || ''} · ${label} · updated ${when}`;
   } catch (e) {
     $('#meta').textContent = 'error: ' + e.message;
   } finally {
@@ -669,7 +731,11 @@ async function load() {
 
 function setTab(name) {
   activeTab = name;
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab').forEach(t => {
+    const active = t.dataset.tab === name;
+    t.classList.toggle('active', active);
+    t.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
   $('#view-usage').classList.toggle('hidden', name !== 'usage');
   $('#view-sessions').classList.toggle('hidden', name !== 'sessions');
   $('#view-tasks').classList.toggle('hidden', name !== 'tasks');
