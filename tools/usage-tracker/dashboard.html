@@ -73,6 +73,7 @@
   .hidden { display:none; }
   th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
   th.sortable:hover { color:var(--fg); }
+  th.sortable:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; color:var(--fg); }
   th.sortable .arrow { font-size:9px; margin-left:4px; opacity:.35; }
   th.sortable.sorted { color:var(--fg); }
   th.sortable.sorted .arrow { opacity:1; color:var(--accent); }
@@ -121,10 +122,10 @@
 <header>
   <h1>⚡ Copilot CLI usage</h1>
   <div class="tabs" role="tablist">
-    <button class="tab active" role="tab" aria-selected="true" data-tab="usage">Usage</button>
-    <button class="tab" role="tab" aria-selected="false" data-tab="sessions">Sessions</button>
-    <button class="tab" role="tab" aria-selected="false" data-tab="tasks">Tasks</button>
-    <button class="tab" role="tab" aria-selected="false" data-tab="stats">Stats</button>
+    <button class="tab active" role="tab" aria-selected="true" tabindex="0" data-tab="usage">Usage</button>
+    <button class="tab" role="tab" aria-selected="false" tabindex="-1" data-tab="sessions">Sessions</button>
+    <button class="tab" role="tab" aria-selected="false" tabindex="-1" data-tab="tasks">Tasks</button>
+    <button class="tab" role="tab" aria-selected="false" tabindex="-1" data-tab="stats">Stats</button>
   </div>
   <div class="spacer"></div>
   <div class="range">
@@ -667,9 +668,11 @@ function statTable(id, def, rows) {
     const numCls = c.td === 'num' ? ' num' : '';
     const isSorted = c.key === st.key;
     const arrow = isSorted ? (st.dir < 0 ? '▼' : '▲') : '▲';
+    const ariaSort = isSorted ? (st.dir < 0 ? 'descending' : 'ascending') : 'none';
     return `<th class="sortable${numCls}${isSorted ? ' sorted' : ''}" `
-         + `data-table="${id}" data-key="${c.key}" data-type="${c.type}">`
-         + `${c.label}<span class="arrow">${arrow}</span></th>`;
+         + `data-table="${id}" data-key="${c.key}" data-type="${c.type}" `
+         + `tabindex="0" aria-sort="${ariaSort}">`
+         + `${c.label}<span class="arrow" aria-hidden="true">${arrow}</span></th>`;
   }).join('');
   const body = sorted.map((rw) => {
     const cells = def.cols.map((c) => {
@@ -712,6 +715,18 @@ function onStatsHeaderClick(e) {
   renderStatsTables();
 }
 
+function onStatsHeaderKeydown(e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const th = e.target.closest('th.sortable');
+  if (!th) return;
+  e.preventDefault();
+  // After re-render, restore focus to the same column header.
+  const { table, key } = th.dataset;
+  onStatsHeaderClick(e);
+  const restored = document.querySelector(`th.sortable[data-table="${table}"][data-key="${key}"]`);
+  if (restored) restored.focus();
+}
+
 function renderStats(r) {
   // Each subagent's share of total reliable subagent time (computed over the
   // full set so the percentage stays absolute while filtering/sorting).
@@ -729,6 +744,7 @@ function renderStats(r) {
       renderStatsTables();
     });
     $('#stats-tables').addEventListener('click', onStatsHeaderClick);
+    $('#stats-tables').addEventListener('keydown', onStatsHeaderKeydown);
   }
   renderStatsTables();
 }
@@ -801,6 +817,7 @@ function setTab(name) {
     const active = t.dataset.tab === name;
     t.classList.toggle('active', active);
     t.setAttribute('aria-selected', active ? 'true' : 'false');
+    t.setAttribute('tabindex', active ? '0' : '-1');
   });
   $('#view-usage').classList.toggle('hidden', name !== 'usage');
   $('#view-sessions').classList.toggle('hidden', name !== 'sessions');
@@ -809,6 +826,20 @@ function setTab(name) {
 }
 
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => setTab(t.dataset.tab)));
+document.querySelector('.tabs').addEventListener('keydown', (e) => {
+  const tabs = [...document.querySelectorAll('.tab')];
+  const idx = tabs.indexOf(document.activeElement);
+  if (idx < 0) return;
+  let next = -1;
+  if (e.key === 'ArrowRight') next = (idx + 1) % tabs.length;
+  else if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = tabs.length - 1;
+  if (next < 0) return;
+  e.preventDefault();
+  tabs[next].focus();
+  setTab(tabs[next].dataset.tab);
+});
 $('#refresh').addEventListener('click', load);
 $('#hide-root').addEventListener('change', () => {
   hideRoot = $('#hide-root').checked;
