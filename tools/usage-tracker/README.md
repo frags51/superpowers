@@ -164,10 +164,10 @@ it):
 
 ## Installing & updating the plugin (skills + agents)
 
-On **Windows**, the one-liner below (`setup.ps1`) does all of this for you. To do
-it by hand on any platform, use either the non-interactive `copilot plugin` CLI
-or the `/plugin` slash commands in a session. (The macOS/Linux `setup.sh` script
-installs standalone tracking only and does not register the plugin.)
+On **macOS/Linux** and **Windows**, the setup scripts (`setup.sh` / `setup.ps1`)
+do all of this for you with a single command. To do it by hand on any platform,
+use either the non-interactive `copilot plugin` CLI or the `/plugin` slash
+commands in a session.
 
 **Install (persistent).** Non-interactive, from any shell:
 
@@ -179,10 +179,6 @@ or interactively, in a Copilot CLI session:
     /plugin marketplace add frags51/superpowers      # or a local path to a checkout
     /plugin install superpowers@superpowers-dev
 
-`/plugin marketplace add` accepts either a GitHub `owner/repo` or a **local
-directory** that contains `.claude-plugin/marketplace.json` (e.g. the clone the
-setup script makes at `$COPILOT_HOME/plugin-data/superpowers-usage/src`).
-
 **Update an already-installed plugin.** Non-interactive:
 
     copilot plugin update superpowers@superpowers-dev
@@ -191,12 +187,6 @@ or, in a Copilot CLI session:
 
     /plugin update superpowers
 
-- If you added the marketplace from **GitHub**, this re-fetches the latest from
-  `frags51/superpowers`.
-- If you added it from a **local path**, update that checkout first (e.g. re-run
-  the setup script, which does `git fetch` + checkout, or `git -C <path> pull`),
-  then run `/plugin update superpowers` to re-copy it into the plugin cache.
-
 **Load without installing (per session).** No marketplace needed:
 
     copilot --plugin-dir /path/to/superpowers-checkout
@@ -204,6 +194,75 @@ or, in a Copilot CLI session:
 This loads the plugin's skills and agents for that one session only.
 
 Restart Copilot CLI after installing so the hooks load.
+
+### macOS / Linux: one command to install or update (recommended)
+
+A single command installs **or updates** the whole setup — the plugin (skills,
+agents, tracking hooks, dashboard) via the Copilot CLI, plus the headless
+AI-credit `statusLine` collector that a plugin manifest cannot register:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/setup.sh | bash
+```
+
+Re-run the **same** command any time to update — it detects an existing install
+and runs `copilot plugin update` instead of `install`. It assumes `node` is on
+PATH and `copilot` is on PATH. Restart Copilot CLI afterward. What it does:
+
+1. `copilot plugin marketplace add frags51/superpowers` (idempotent).
+2. `copilot plugin install superpowers@superpowers-dev` — or `update` if the
+   plugin is already installed.
+3. Wires the snapshot `statusLine` to the freshly installed plugin's own
+   `snapshot.js`, so `copilot plugin update` keeps it current.
+4. Removes leftovers from the older standalone installer (its
+   `superpowers-usage.json` hooks file and clone dir) so events aren't tracked
+   twice.
+
+**Uninstall** (removes the statusLine, the plugin, and the marketplace; your
+recorded `usage.db` history is left in place):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/uninstall.sh | bash
+```
+
+From a local checkout you can run the scripts directly (they honor `COPILOT_HOME`,
+default `~/.copilot`):
+
+    bash vendor/superpowers/tools/usage-tracker/setup.sh
+    bash vendor/superpowers/tools/usage-tracker/uninstall.sh
+
+Environment overrides:
+
+| Env var | Purpose | Default |
+| --- | --- | --- |
+| `COPILOT_HOME` | Copilot config dir | `~/.copilot` |
+| `SUPERPOWERS_USAGE_STANDALONE=1` | force standalone mode (tracking only, no plugin) | off |
+| `SUPERPOWERS_USAGE_NO_SNAPSHOT=1` | install plugin only; skip the AI-credit statusLine | off |
+| `SUPERPOWERS_USAGE_DEBUG=1` | show a live `⚡ <AIC> AIC` status line | off |
+
+#### Standalone mode (no Copilot CLI on PATH)
+
+When `copilot` is not on PATH, `setup.sh` automatically falls back to
+**standalone mode**: it clones the repo, self-tests, and wires a self-contained
+hooks file + headless snapshot collector without installing the plugin. You can
+also force this with `SUPERPOWERS_USAGE_STANDALONE=1`. Additional overrides for
+standalone mode:
+
+| Env var | Purpose | Default |
+| --- | --- | --- |
+| `SUPERPOWERS_USAGE_REPO` | git URL to clone | `https://github.com/frags51/superpowers.git` |
+| `SUPERPOWERS_USAGE_REF` | branch/tag/commit | `main` |
+| `SUPERPOWERS_USAGE_SRC` | where to clone | `$COPILOT_HOME/plugin-data/superpowers-usage/src` |
+| `SUPERPOWERS_USAGE_WITH_SKILL=1` | also install the `viewing-usage-dashboard` skill | off |
+
+Uninstall a standalone install with:
+
+    COPILOT_HOME="$COPILOT_HOME" node "$COPILOT_HOME/plugin-data/superpowers-usage/src/tools/usage-tracker/uninstall.js"
+
+> If you later install the superpowers plugin via `/plugin` on the same machine,
+> re-run `setup.sh` (without `SUPERPOWERS_USAGE_STANDALONE=1`) so it upgrades to
+> the plugin-based install and removes the standalone hooks that would
+> double-count events.
 
 ### Windows: one command to install or update (recommended)
 
@@ -245,51 +304,6 @@ the plugin only and skip wiring the credit `statusLine`):
     powershell -File uninstall.ps1
 
 
-### Install on another machine, tracking only (macOS / Linux)
-
-To set this up on a different machine — downloading the tool and wiring both the
-hooks and the headless credit snapshotter **without** installing the full plugin —
-run the remote installer. It clones the fork, self-tests, and installs into
-Copilot:
-
-    curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/setup.sh | bash
-
-Or, from a local checkout:
-
-    bash vendor/superpowers/tools/usage-tracker/setup.sh
-
-> **Windows:** there is no standalone (no-plugin) installer — use the
-> `setup.ps1` one-liner in the section above, which installs the plugin via the
-> Copilot CLI and wires the snapshot statusLine.
-
-The same `SUPERPOWERS_USAGE_*` / `COPILOT_HOME` environment overrides apply.
-
-This writes a **self-contained hooks file** at
-`$COPILOT_HOME/hooks/superpowers-usage.json` (absolute paths, all lifecycle
-events) plus the headless credit snapshotter, then prints next steps. Restart
-Copilot CLI afterward. Overrides via environment:
-
-| Env var | Purpose | Default |
-| --- | --- | --- |
-| `COPILOT_HOME` | Copilot config dir | `~/.copilot` |
-| `SUPERPOWERS_USAGE_REPO` | git URL to clone | `https://github.com/frags51/superpowers.git` |
-| `SUPERPOWERS_USAGE_REF` | branch/tag/commit | `main` |
-| `SUPERPOWERS_USAGE_SRC` | where to clone | `$COPILOT_HOME/plugin-data/superpowers-usage/src` |
-| `SUPERPOWERS_USAGE_NO_SNAPSHOT=1` | install hooks only (skip credit snapshots) | off |
-| `SUPERPOWERS_USAGE_WITH_SKILL=1` | also install the `viewing-usage-dashboard` reporting skill (needs `copilot` on PATH) | off |
-| `SUPERPOWERS_USAGE_DEBUG=1` | show a live `⚡ <AIC> AIC` status line (passes `--debug` to the installer) | off |
-
-Uninstall a standalone install with:
-
-    node "$COPILOT_HOME/plugin-data/superpowers-usage/src/tools/usage-tracker/uninstall.js"
-
-> If you later install the superpowers plugin via `/plugin` on the same machine,
-> remove the standalone hooks file first (`uninstall.js`) so events aren't
-> recorded twice.
-
-For a machine that should record events but not AI-credit usage, `node
-install.js --no-snapshot` writes only the hooks file (no statusLine collector).
-
 ### Tracking + the reporting skill, without the full plugin
 
 The standalone install records usage but ships no skills, so you cannot ask
@@ -298,7 +312,7 @@ hooks **plus only** the `viewing-usage-dashboard` skill — without the rest of
 the Superpowers library — run the standalone installer with
 `SUPERPOWERS_USAGE_WITH_SKILL=1`:
 
-    SUPERPOWERS_USAGE_WITH_SKILL=1 bash vendor/superpowers/tools/usage-tracker/setup.sh
+    SUPERPOWERS_USAGE_STANDALONE=1 SUPERPOWERS_USAGE_WITH_SKILL=1 bash vendor/superpowers/tools/usage-tracker/setup.sh
     # or, against an existing standalone install:
     node vendor/superpowers/tools/usage-tracker/install.js --with-reporting-skill
     # only the skill (skip the hooks/snapshot — e.g. they are already installed):
