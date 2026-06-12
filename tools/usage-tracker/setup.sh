@@ -9,7 +9,7 @@
 # status line) that records AI-credit usage.
 #
 # Usage (one-liner):
-#   curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/setup.sh | bash
 #
 # Usage (local checkout):
 #   bash tools/usage-tracker/setup.sh
@@ -17,7 +17,7 @@
 # Environment overrides:
 #   COPILOT_HOME            Copilot config dir            (default: ~/.copilot)
 #   SUPERPOWERS_USAGE_REPO  git URL to clone              (default: https://github.com/frags51/superpowers.git)
-#   SUPERPOWERS_USAGE_REF   branch/tag/commit to install  (default: ghcp-native)
+#   SUPERPOWERS_USAGE_REF   branch/tag/commit to install  (default: main)
 #   SUPERPOWERS_USAGE_SRC   where to clone the source     (default: $COPILOT_HOME/plugin-data/superpowers-usage/src)
 #   SUPERPOWERS_USAGE_NO_SNAPSHOT=1   install hooks only (skip AI-credit snapshots)
 #   SUPERPOWERS_USAGE_WITH_SKILL=1    also install the viewing-usage-dashboard
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 REPO_URL="${SUPERPOWERS_USAGE_REPO:-https://github.com/frags51/superpowers.git}"
-REF="${SUPERPOWERS_USAGE_REF:-ghcp-native}"
+REF="${SUPERPOWERS_USAGE_REF:-main}"
 COPILOT_HOME="${COPILOT_HOME:-$HOME/.copilot}"
 SRC="${SUPERPOWERS_USAGE_SRC:-$COPILOT_HOME/plugin-data/superpowers-usage/src}"
 TOOL_SUBDIR="tools/usage-tracker"

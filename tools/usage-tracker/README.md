@@ -252,7 +252,7 @@ hooks and the headless credit snapshotter **without** installing the full plugin
 run the remote installer. It clones the fork, self-tests, and installs into
 Copilot:
 
-    curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/ghcp-native/tools/usage-tracker/setup.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/frags51/superpowers/main/tools/usage-tracker/setup.sh | bash
 
 Or, from a local checkout:
 
@@ -273,7 +273,7 @@ Copilot CLI afterward. Overrides via environment:
 | --- | --- | --- |
 | `COPILOT_HOME` | Copilot config dir | `~/.copilot` |
 | `SUPERPOWERS_USAGE_REPO` | git URL to clone | `https://github.com/frags51/superpowers.git` |
-| `SUPERPOWERS_USAGE_REF` | branch/tag/commit | `ghcp-native` |
+| `SUPERPOWERS_USAGE_REF` | branch/tag/commit | `main` |
 | `SUPERPOWERS_USAGE_SRC` | where to clone | `$COPILOT_HOME/plugin-data/superpowers-usage/src` |
 | `SUPERPOWERS_USAGE_NO_SNAPSHOT=1` | install hooks only (skip credit snapshots) | off |
 | `SUPERPOWERS_USAGE_WITH_SKILL=1` | also install the `viewing-usage-dashboard` reporting skill (needs `copilot` on PATH) | off |
