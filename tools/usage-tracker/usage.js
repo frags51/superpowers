@@ -34,9 +34,12 @@ export function toolMatchKey(toolName, args) {
 // before the first snapshot. A phase therefore measures end - base where:
 //   - end  = last snapshot at/before endMs (null only if the phase closed before
 //            ANY snapshot was captured for the session — genuinely underivable)
-//   - base = last snapshot at/before startMs, or the session's 0 origin when the
-//            phase began before the first snapshot (so the first phase's usage is
-//            attributed instead of being dropped).
+//   - base = last snapshot at/before startMs, or the session's 0 origin when no
+//            prior snapshot exists. This means a phase that starts before the
+//            first snapshot gets a 0 baseline, so its delta covers all cumulative
+//            AIC from session start up to its end snapshot — including any usage
+//            from earlier phases that had no snapshot coverage of their own.
+//            The alternative (returning null) would silently drop that usage.
 export function snapshotDelta(rows, startMs, endMs) {
   const sorted = [...rows].sort((a, b) => a.captured_at - b.captured_at);
   const atOrBefore = (t) => {

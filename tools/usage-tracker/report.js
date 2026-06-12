@@ -72,6 +72,11 @@ function reconcilePhaseDeltas(db) {
     if (!own.length) continue;
     const d = snapshotDelta(own, p.started_at, p.ended_at);
     if (d.aiu_delta == null) continue; // no snapshot baseline in window — leave stored
+    // Guard: if the computed delta is zero and the stored delta is null (phase was
+    // never finalized with real snapshot data), there is nothing to correct.
+    // Skipping prevents a sentinel row (aiu=0, inserted when no shutdown event was
+    // found) from silently promoting a phase from "unknown" (null) to "zero".
+    if (d.aiu_delta === 0 && p.aiu_delta == null) continue;
 
     // Roll in DISTINCT separate-child sessions (self-links/duplicates excluded).
     const children = db.all(
@@ -278,7 +283,21 @@ export function buildReport(db, opts = {}) {
             'INSERT INTO usage_snapshots (session_id, captured_at, aiu, premium_requests, cost_total) VALUES (?,?,?,?,?)',
             [snap.session_id, snap.captured_at, snap.aiu, snap.premium_requests, snap.cost_total],
           );
-          liveAiuBySession.set(s, Math.max(0, Number(snap.aiu)));
+          // Apply the same range-aware calculation used for regular snapshots.
+          // Setting snap.aiu directly would over-report when the snapshot falls
+          // outside r.to (e.g. a long session that ended after the range window).
+          try {
+            const liveRow = db.get(
+              `SELECT MAX(${aiuToExpr}) AS aiu_to, MAX(${aiuFromExpr}) AS aiu_from FROM usage_snapshots WHERE session_id=?`,
+              [s],
+            );
+            if (liveRow && liveRow.aiu_to != null) {
+              const live = Number(liveRow.aiu_to) - (liveRow.aiu_from == null ? 0 : Number(liveRow.aiu_from));
+              liveAiuBySession.set(s, Math.max(0, live));
+            }
+            // If aiu_to is null the snapshot is outside the range window; don't
+            // set — the session falls back to its summed phase deltas.
+          } catch { /* best-effort */ }
         } else {
           // Sentinel: marks this session as permanently attempted so it is
           // excluded from the LEFT JOIN on every subsequent report build.
@@ -526,6 +545,9 @@ export function buildReport(db, opts = {}) {
   // Groups phases by task, joining back to sessions for repo/branch identity.
   // Range filter applies to phases.started_at so tasks with NO phase in the
   // window are excluded even if the task itself started outside the window.
+  // Skip entirely when the caller signals it will fetch tasks on-demand.
+  let tasks = [];
+  if (!opts.skipTasks) {
   const taskPhaseRows = db.all(`
     SELECT COALESCE(t.task_id, '(unknown)')          AS task_id,
            p.session_id                              AS phase_session_id,
@@ -593,10 +615,11 @@ export function buildReport(db, opts = {}) {
     }
   }
 
-  const tasks = [...taskMap.values()].map((tk) => ({
+  tasks = [...taskMap.values()].map((tk) => ({
     ...tk,
     skills: tk.skills.sort((a, z) => z.durationMs - a.durationMs),
   })).sort((a, z) => (z.startedAt ?? z.firstAt ?? 0) - (a.startedAt ?? a.firstAt ?? 0));
+  } // end if (!opts.skipTasks)
 
   return {
     generatedAt: nowMs(),
@@ -608,6 +631,87 @@ export function buildReport(db, opts = {}) {
     },
     tree, tools, skills, subagents, sessions, tasks,
   };
+}
+
+// Fetch tasks for a single session — used by the /api/tasks endpoint so the
+// main /api/report call can skip the expensive cross-session tasks SQL.
+export function buildTasksForSession(db, sessionId, opts = {}) {
+  const r = rangeClauses(opts);
+  const minT = (a, b) => (a == null ? b : b == null ? a : Math.min(a, b));
+  const maxT = (a, b) => (a == null ? b : b == null ? a : Math.max(a, b));
+
+  const taskPhaseRows = db.all(`
+    SELECT COALESCE(t.task_id, '(unknown)')          AS task_id,
+           p.session_id                              AS phase_session_id,
+           COALESCE(t.session_id, p.session_id)      AS session_id,
+           COALESCE(s.repo, '(unknown repo)')         AS repo,
+           COALESCE(s.branch, '(no branch)')          AS branch,
+           COALESCE(t.feature, '(unknown)')            AS feature,
+           t.label                                    AS label,
+           t.turn_index                               AS turn_index,
+           t.prompt_excerpt                           AS prompt_excerpt,
+           t.started_at                               AS task_started,
+           t.ended_at                                 AS task_ended,
+           COALESCE(p.skill, '(root)')                AS skill,
+           COUNT(*)                                   AS n,
+           COALESCE(SUM(p.aiu_delta), 0)              AS aiu,
+           COALESCE(SUM(p.duration_ms), 0)            AS duration_ms,
+           COALESCE(SUM(p.total_tokens), 0)           AS tokens,
+           MIN(p.started_at)                          AS first_at,
+           MAX(p.started_at)                          AS last_at
+    FROM phases p
+    LEFT JOIN tasks t  ON p.task_id = t.task_id AND p.session_id = t.session_id
+    LEFT JOIN sessions s ON p.session_id = s.session_id
+    WHERE p.session_id = ?${r.and('p.started_at')}
+    GROUP BY p.session_id, t.task_id, p.skill`, [sessionId]);
+
+  const taskMap = new Map();
+  for (const row of taskPhaseRows) {
+    const sid = row.phase_session_id || row.session_id || '(unknown-session)';
+    const tid = row.task_id || '(unknown)';
+    const mapKey = `${sid}::${tid}`;
+    let tk = taskMap.get(mapKey);
+    if (!tk) {
+      tk = {
+        taskId: tid, sessionId: sid, repo: row.repo, branch: row.branch,
+        feature: row.feature, label: row.label ?? null, turnIndex: n(row.turn_index),
+        promptExcerpt: row.prompt_excerpt ?? null,
+        startedAt: ts(row.task_started), endedAt: ts(row.task_ended),
+        aiu: 0, durationMs: 0, tokens: 0, firstAt: null, lastAt: null, skills: [],
+      };
+      taskMap.set(mapKey, tk);
+    }
+    const first = ts(row.first_at); const last = ts(row.last_at);
+    tk.skills.push({ skill: row.skill, count: n(row.n), aiu: n(row.aiu), durationMs: n(row.duration_ms), tokens: n(row.tokens), firstAt: first, lastAt: last });
+    tk.aiu += n(row.aiu); tk.durationMs += n(row.duration_ms); tk.tokens += n(row.tokens);
+    tk.firstAt = minT(tk.firstAt, first); tk.lastAt = maxT(tk.lastAt, last);
+  }
+
+  // Live AIC from usage_snapshots for this session (same logic as buildReport).
+  const aiuToExpr = r.to != null ? `CASE WHEN captured_at <= ${r.to} THEN aiu END` : 'aiu';
+  const aiuFromExpr = r.from != null ? `CASE WHEN captured_at < ${r.from} THEN aiu END` : 'NULL';
+  try {
+    const liveRow = db.get(
+      `SELECT MAX(${aiuToExpr}) AS aiu_to, MAX(${aiuFromExpr}) AS aiu_from FROM usage_snapshots WHERE session_id = ?`,
+      [sessionId],
+    );
+    if (liveRow && liveRow.aiu_to != null) {
+      const live = Math.max(0, Number(liveRow.aiu_to) - (liveRow.aiu_from == null ? 0 : Number(liveRow.aiu_from)));
+      const tks = [...taskMap.values()];
+      const finalizedTotal = tks.reduce((s, t) => s + t.aiu, 0);
+      if (live > finalizedTotal) {
+        const totalDur = tks.reduce((s, t) => s + t.durationMs, 0);
+        for (const tk of tks) {
+          tk.aiu = totalDur > 0 ? live * (tk.durationMs / totalDur) : live / tks.length;
+        }
+      }
+    }
+  } catch { /* best-effort */ }
+
+  return [...taskMap.values()].map((tk) => ({
+    ...tk,
+    skills: tk.skills.sort((a, z) => z.durationMs - a.durationMs),
+  })).sort((a, z) => (z.startedAt ?? z.firstAt ?? 0) - (a.startedAt ?? a.firstAt ?? 0));
 }
 
 function main() {

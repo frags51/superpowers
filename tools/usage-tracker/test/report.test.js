@@ -736,3 +736,67 @@ test('buildReport tasks: live AIC from snapshots distributed proportionally acro
     assert.ok(Math.abs(t1.aiu - 0.20) < 0.001, `t1.aiu expected ~0.20, got ${t1.aiu}`);
   } finally { db.close(); rmSync(path, { force: true }); }
 });
+
+// Regression: shutdown snapshot AIC must be range-filtered using the same
+// aiuToExpr/aiuFromExpr logic as regular snapshots.  A session whose shutdown
+// snapshot falls OUTSIDE r.to (i.e. the session ended after the range window)
+// must NOT contribute its full AIC to the filtered report.
+test('buildReport: shutdown snapshot AIC is range-filtered (snapshot outside r.to → 0)', () => {
+  const base = mkdtempSync(join(tmpdir(), 'sp-report-shutrange-'));
+  const sessId = 'autopilot-long';
+  const sessDir = join(base, 'session-state', sessId);
+  mkdirSync(sessDir, { recursive: true });
+
+  // Session ran from T=0 to T=100. Range is [50, 80]. Snapshot at T=100 is outside.
+  const T0 = 0;
+  const TO = 100;
+  const rangeFrom = 50;
+  const rangeTo = 80;
+
+  writeFileSync(join(sessDir, 'events.jsonl'),
+    JSON.stringify({ type: 'session.shutdown', data: { totalNanoAiu: 200 * 1e9 } }) + '\n');
+
+  const path = join(tmpdir(), `sp-report-shutrange-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    db.run('INSERT INTO sessions (session_id, repo, branch, started_at, ended_at) VALUES (?,?,?,?,?)',
+      [sessId, 'repo', 'main', T0, TO]);
+    db.run('INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES (?,?,?,?,?)',
+      [`${sessId}:0`, sessId, 'main', 0, T0]);
+    // Phase starts within range so the session appears in sessMap.
+    db.run('INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, ended_at, duration_ms, aiu_delta, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      ['ph', `${sessId}:0`, sessId, 'main', null, 'root', 0, 55, TO, 45, null, 'closed']);
+
+    const resolveTranscript = (s) => join(base, 'session-state', s, 'events.jsonl');
+    const r = buildReport(db, { from: rangeFrom, to: rangeTo, resolveTranscript });
+
+    const se = r.sessions.find((s) => s.sessionId === sessId);
+    assert.ok(se, 'session must appear — it has a phase within the range');
+    // Snapshot captured_at = session.ended_at = 100 > r.to = 80, so aiu_to = null
+    // → must NOT inject 200 AIC into the filtered window.
+    assert.equal(se.aiu, 0,
+      `aiu should be 0 when shutdown snapshot is outside r.to, got ${se.aiu}`);
+  } finally { db.close(); rmSync(path, { force: true }); rmSync(base, { recursive: true, force: true }); }
+});
+
+// Regression: reconcilePhaseDeltas must not overwrite a phase's null aiu_delta
+// with 0 just because the only snapshot is a sentinel (aiu=0, no premium/cost).
+// A sentinel means "we tried but could not recover usage data" — the phase should
+// remain null (unknown) rather than being promoted to 0 (zero credits used).
+test('buildReport: reconcilePhaseDeltas leaves null aiu_delta untouched when only snapshot is a sentinel', () => {
+  const path = join(tmpdir(), `sp-report-sentinel-null-${randomUUID()}.db`);
+  const db = openDb(path);
+  try {
+    db.run("INSERT INTO sessions (session_id, repo, branch, started_at, ended_at) VALUES ('sk','repo','main',0,100)");
+    db.run("INSERT INTO tasks (task_id, session_id, feature, turn_index, started_at) VALUES ('sk:0','sk','main',0,0)");
+    db.run("INSERT INTO phases (phase_id, task_id, session_id, feature, skill, kind, seq, started_at, ended_at, duration_ms, aiu_delta, status) VALUES ('pk','sk:0','sk','main',null,'root',0,0,100,100,NULL,'closed')");
+    // Insert a sentinel row (aiu=0, no premium/cost — same shape as the real sentinel).
+    db.run("INSERT INTO usage_snapshots (session_id, captured_at, aiu) VALUES ('sk',100,0)");
+
+    buildReport(db);
+
+    const ph = db.get("SELECT aiu_delta FROM phases WHERE phase_id='pk'");
+    assert.equal(ph.aiu_delta, null,
+      `aiu_delta should remain null (unknown) when only data is a sentinel, got ${ph.aiu_delta}`);
+  } finally { db.close(); rmSync(path, { force: true }); }
+});

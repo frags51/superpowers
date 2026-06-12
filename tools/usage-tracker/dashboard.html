@@ -104,6 +104,17 @@
     border:1px solid var(--line); border-radius:8px; padding:7px 11px; font-size:13px; font-family:inherit; }
   .sessfilterbar input:focus { outline:none; border-color:var(--accent); }
   .sessfilterbar .meta { white-space:nowrap; }
+  .sess-id { background:var(--panel2); border:1px solid var(--line); border-radius:4px;
+    padding:1px 5px; font-size:11px; color:var(--muted); font-family:monospace;
+    cursor:pointer; white-space:nowrap; }
+  .sess-id:hover { border-color:var(--accent); color:var(--fg); }
+  .view-tasks-btn { padding:2px 8px; font-size:11px; white-space:nowrap; }
+  .tasksfilterbar { display:flex; align-items:center; gap:10px; margin:0 0 8px; }
+  .tasksfilterbar input { flex:1; max-width:420px; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:7px 11px; font-size:13px;
+    font-family:monospace; }
+  .tasksfilterbar input:focus { outline:none; border-color:var(--accent); }
+  .tasksfilterbar .meta { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -404,12 +415,16 @@ function sessionItem(se, seMax) {
   const where = se.title ? ` <span class="meta">· ${esc(se.repo)} / ${esc(se.branch)}</span>` : '';
   const childBadge = isChild ? ` <span class="child-badge">↳ subagent · AIC included in parent</span>` : '';
   const icon = isChild ? '🤖' : '🧵';
+  const sessIdHtml = se.sessionId
+    ? ` <code class="sess-id" title="${esc(se.sessionId)}">${esc(se.sessionId.substring(0, 8))}</code>`
+    + ` <button type="button" class="view-tasks-btn" data-session="${esc(se.sessionId)}">→ Tasks</button>`
+    : '';
   const numsHtml = isChild
     ? `<span class="nums"><span class="credit" title="Included in parent session's total">${aic(se.aiu)} AIC↑</span><span class="dur">${sec(se.durationMs)}</span></span>`
     : nums(se.aiu, se.durationMs);
   return `<details open class="${isChild ? 'child-session' : ''}">
     <summary>
-      <span class="name grow">${icon} ${headline}${where}${model}${childBadge}
+      <span class="name grow">${icon} ${headline}${where}${model}${childBadge}${sessIdHtml}
         <span class="ts">· started ${ts(se.startedAt ?? se.firstAt)}</span></span>
       <span class="bar"><i style="width:${pct(se.durationMs, seMax)}%"></i></span>
       ${numsHtml}
@@ -460,22 +475,65 @@ function renderTasks(tasks) {
   tasksData = tasks;
   tasksPage = 1;
   if (!tasksData.length) {
-    $('#view-tasks').innerHTML = tasksLegend() + '<div class="empty">No tasks recorded yet.</div>';
+    $('#tasks-body').innerHTML = '<div class="empty">No tasks found for this session.</div>';
     return;
   }
-  $('#view-tasks').innerHTML = tasksLegend() + '<div id="tasks-body"></div>';
+  $('#tasks-body').innerHTML = '<div id="tasks-list"></div>';
   renderTasksBody();
 }
 
 function renderTasksBody() {
+  const container = document.getElementById('tasks-list') || $('#tasks-body');
   const total = tasksData.length;
   if (tasksPage > pageCount(total)) tasksPage = pageCount(total);
   const start = (tasksPage - 1) * PAGE_SIZE;
   const items = tasksData.slice(start, start + PAGE_SIZE);
   const tkMax = Math.max(...items.map(t => t.durationMs), 1);
   const controls = pager('tasks', total, tasksPage, 'tasks');
-  $('#tasks-body').innerHTML = controls + items.map(t => taskItem(t, tkMax)).join('') + controls;
+  container.innerHTML = controls + items.map(t => taskItem(t, tkMax)).join('') + controls;
   wirePager('tasks', (dir) => { tasksPage += dir === 'next' ? 1 : -1; renderTasksBody(); });
+}
+
+let tasksSessionId = null;
+let tasksTabInited = false;
+
+function initTasksTab() {
+  if (tasksTabInited) return;
+  tasksTabInited = true;
+  $('#view-tasks').innerHTML = tasksLegend()
+    + `<div class="tasksfilterbar">
+        <input id="tasks-session" type="text" placeholder="Paste a session ID, or click → Tasks on a session…" aria-label="Session ID" spellcheck="false" autocomplete="off" />
+        <button id="load-tasks-btn">Load</button>
+        <span class="meta" id="tasks-session-meta"></span>
+      </div>`
+    + '<div id="tasks-body"><div class="empty">Select a session from the Sessions tab to view its tasks.</div></div>';
+  $('#tasks-session').addEventListener('keydown', (e) => { if (e.key === 'Enter') triggerTasksLoad(); });
+  $('#load-tasks-btn').addEventListener('click', triggerTasksLoad);
+}
+
+function triggerTasksLoad() {
+  const sid = $('#tasks-session').value.trim();
+  if (sid) loadTasksForSession(sid);
+}
+
+async function loadTasksForSession(sessionId) {
+  initTasksTab();
+  tasksSessionId = sessionId;
+  const input = document.getElementById('tasks-session');
+  if (input) input.value = sessionId;
+  const metaEl = document.getElementById('tasks-session-meta');
+  if (metaEl) metaEl.textContent = 'loading…';
+  try {
+    const range = currentRange();
+    const qs = new URLSearchParams({ session: sessionId, t: String(Date.now()) });
+    if (range.from != null) qs.set('from', String(Math.floor(range.from)));
+    if (range.to != null) qs.set('to', String(Math.floor(range.to)));
+    const tasks = await (await fetch('/api/tasks?' + qs.toString())).json();
+    renderTasks(tasks);
+    if (metaEl) metaEl.textContent = `${tasks.length} task${tasks.length === 1 ? '' : 's'}`;
+  } catch (e) {
+    if (metaEl) metaEl.textContent = 'error: ' + e.message;
+  }
 }
 
 function renderSessions(sessions) {
@@ -523,6 +581,13 @@ function renderSessionsBody() {
   }
   $('#sessions-body').innerHTML = controls + items.map(se => sessionItem(se, seMax)).join('') + controls;
   wirePager('sessions', (dir) => { sessionsPage += dir === 'next' ? 1 : -1; renderSessionsBody(); });
+  document.querySelectorAll('.view-tasks-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setTab('tasks');
+      loadTasksForSession(btn.dataset.session);
+    });
+  });
 }
 
 // --- Stats tab: sortable + filterable analysis tables ----------------------
@@ -718,7 +783,8 @@ async function load() {
     chips(r.totals, label);
     renderUsage(r.tree);
     renderSessions(r.sessions);
-    renderTasks(r.tasks || []);
+    initTasksTab();
+    if (tasksSessionId) loadTasksForSession(tasksSessionId);
     renderStats(r);
     const when = new Date(r.generatedAt).toLocaleTimeString();
     $('#meta').textContent = `${r.dbPath || ''} · ${label} · updated ${when}`;
@@ -748,7 +814,7 @@ $('#hide-root').addEventListener('change', () => {
   hideRoot = $('#hide-root').checked;
   if ($('#usage-body'))    renderUsageBody();
   if ($('#sessions-body')) renderSessionsBody();
-  if ($('#tasks-body'))    renderTasksBody();
+  if ($('#tasks-body') && tasksData.length) renderTasksBody();
 });
 
 const presetEl = $('#range-preset');

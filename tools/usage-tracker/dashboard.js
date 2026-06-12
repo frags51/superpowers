@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { platform } from 'node:os';
 import { openDb, defaultDbPath, defaultSessionStorePath, loadSessionTitles, isMainModule } from './db.js';
-import { buildReport } from './report.js';
+import { buildReport, buildTasksForSession } from './report.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -52,7 +52,12 @@ function report(dbPath, opts) {
   const env = process.env;
   const copilotHome = env.COPILOT_HOME || join(env.HOME || env.USERPROFILE || '.', '.copilot');
   const resolveTranscript = (s) => join(copilotHome, 'session-state', s, 'events.jsonl');
-  try { return buildReport(db, { ...opts, sessionTitles, resolveTranscript }); } finally { db.close(); }
+  try { return buildReport(db, { ...opts, sessionTitles, resolveTranscript, skipTasks: true }); } finally { db.close(); }
+}
+
+function tasksForSession(dbPath, sessionId, opts) {
+  const db = openDb(dbPath);
+  try { return buildTasksForSession(db, sessionId, opts); } finally { db.close(); }
 }
 
 function send(res, code, type, body) {
@@ -76,6 +81,12 @@ export function createDashboard(dbPath) {
       }
       if (req.url.startsWith('/api/report')) {
         return send(res, 200, 'application/json; charset=utf-8', JSON.stringify({ ...report(dbPath, parseRange(req.url)), dbPath }));
+      }
+      if (req.url.startsWith('/api/tasks')) {
+        const q = new URL(req.url, 'http://localhost').searchParams;
+        const sessionId = q.get('session');
+        if (!sessionId) return send(res, 400, 'application/json', JSON.stringify({ error: 'session parameter required' }));
+        return send(res, 200, 'application/json; charset=utf-8', JSON.stringify(tasksForSession(dbPath, sessionId, parseRange(req.url))));
       }
       send(res, 404, 'text/plain', 'not found');
     } catch (e) {
